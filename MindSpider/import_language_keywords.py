@@ -3,10 +3,9 @@
 """
 从语料库导入语情关键词到 daily_topics。
 
-默认行为：
-1) 读取 Data/自建语料库 (1).csv（自动回退到同名 xlsx/csv）
-2) 提取关键词并去重
-3) 覆盖指定日期（默认今天）的 daily_topics，仅保留 1 条语情关键词记录
+支持两种写入策略：
+1) fixed: 所有关键词写入指定日期（默认今天）
+2) from-row-time: 按每行时间列自动分配到对应日期
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import json
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -36,6 +35,7 @@ DEFAULT_CANDIDATES = [
 
 KEYWORD_COLUMNS = ["检索词", "话题"]
 FILTER_COLUMNS = ["主题", "次主题", "次次主题"]
+DEFAULT_TIME_COLUMN = "时间"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +52,31 @@ def parse_args() -> argparse.Namespace:
         "--date",
         type=str,
         default="",
-        help="目标日期，格式 YYYY-MM-DD，默认今天",
+        help="目标日期，格式 YYYY-MM-DD，默认今天（date-mode=fixed时生效）",
+    )
+    parser.add_argument(
+        "--date-mode",
+        choices=["fixed", "from-row-time"],
+        default="fixed",
+        help="fixed=统一写入同一天；from-row-time=按行时间写入各自日期",
+    )
+    parser.add_argument(
+        "--time-column",
+        type=str,
+        default=DEFAULT_TIME_COLUMN,
+        help="按行写入时使用的时间列名，默认“时间”",
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default="",
+        help="按行写入时的起始日期（含），YYYY-MM-DD",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default="",
+        help="按行写入时的结束日期（含），YYYY-MM-DD",
     )
     parser.add_argument(
         "--topic-name",
@@ -203,6 +227,74 @@ def extract_keywords(df: pd.DataFrame, max_keywords: int) -> List[str]:
     return keywords
 
 
+def parse_iso_date(raw: str) -> date:
+    return datetime.strptime(raw, "%Y-%m-%d").date()
+
+
+def to_date_safe(raw: object) -> date | None:
+    text_value = normalize_text(raw)
+    if not text_value:
+        return None
+    ts = pd.to_datetime(text_value, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return ts.date()
+
+
+def limit_keywords(items: Sequence[str], max_keywords: int) -> List[str]:
+    if max_keywords <= 0:
+        return []
+    return list(items[:max_keywords])
+
+
+def extract_keywords_by_date(
+    df: pd.DataFrame,
+    *,
+    time_column: str,
+    max_keywords: int,
+    start_date: date | None,
+    end_date: date | None,
+) -> Dict[date, List[str]]:
+    if time_column not in df.columns:
+        raise ValueError(f"未找到时间列: {time_column}")
+
+    keyword_cols = [c for c in KEYWORD_COLUMNS if c in df.columns]
+    if not keyword_cols:
+        raise ValueError(f"输入文件中未找到关键词列，期望包含: {KEYWORD_COLUMNS}")
+
+    date_to_keywords: Dict[date, List[str]] = {}
+    date_to_seen: Dict[date, set] = {}
+
+    for _, row in df.iterrows():
+        row_date = to_date_safe(row.get(time_column))
+        if row_date is None:
+            continue
+        if start_date and row_date < start_date:
+            continue
+        if end_date and row_date > end_date:
+            continue
+
+        if row_date not in date_to_keywords:
+            date_to_keywords[row_date] = []
+            date_to_seen[row_date] = set()
+
+        current = date_to_keywords[row_date]
+        seen = date_to_seen[row_date]
+        if len(current) >= max_keywords:
+            continue
+
+        for col in keyword_cols:
+            kw = normalize_text(row.get(col))
+            if not kw or kw in seen:
+                continue
+            seen.add(kw)
+            current.append(kw)
+            if len(current) >= max_keywords:
+                break
+
+    return {d: kws for d, kws in date_to_keywords.items() if kws}
+
+
 def make_topic_id(topic_name: str, target_date: date) -> str:
     seed = f"{topic_name}-{target_date.isoformat()}"
     h = hashlib.md5(seed.encode("utf-8")).hexdigest()[:12]
@@ -225,126 +317,117 @@ def build_engine():
     return create_engine(url, future=True)
 
 
-def upsert_daily_topics(
-    *,
-    target_date: date,
-    topic_id: str,
-    topic_name: str,
-    topic_description: str,
-    keywords: List[str],
-    mode: str,
-) -> None:
+def upsert_daily_topics(conn, *, target_date: date, topic_id: str, topic_name: str, topic_description: str, keywords: List[str], mode: str) -> None:
     now_ts = int(time.time())
     kw_json = json.dumps(keywords, ensure_ascii=False)
 
-    engine = build_engine()
-    with engine.begin() as conn:
-        if mode == "overwrite":
-            conn.execute(
-                text("DELETE FROM daily_topics WHERE extract_date = :d"),
-                {"d": target_date},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO daily_topics
-                    (topic_id, topic_name, topic_description, keywords, extract_date,
-                     relevance_score, news_count, processing_status, add_ts, last_modify_ts)
-                    VALUES
-                    (:topic_id, :topic_name, :topic_description, :keywords, :extract_date,
-                     :relevance_score, :news_count, :processing_status, :add_ts, :last_modify_ts)
-                    """
-                ),
-                {
-                    "topic_id": topic_id,
-                    "topic_name": topic_name,
-                    "topic_description": topic_description,
-                    "keywords": kw_json,
-                    "extract_date": target_date,
-                    "relevance_score": 1.0,
-                    "news_count": 0,
-                    "processing_status": "completed",
-                    "add_ts": now_ts,
-                    "last_modify_ts": now_ts,
-                },
-            )
-            return
-
-        # append: 合并到同一天同 topic_id 的记录，不存在就新建
-        row = conn.execute(
+    if mode == "overwrite":
+        conn.execute(
+            text("DELETE FROM daily_topics WHERE extract_date = :d"),
+            {"d": target_date},
+        )
+        conn.execute(
             text(
                 """
-                SELECT keywords
-                FROM daily_topics
-                WHERE extract_date = :d AND topic_id = :topic_id
-                LIMIT 1
+                INSERT INTO daily_topics
+                (topic_id, topic_name, topic_description, keywords, extract_date,
+                 relevance_score, news_count, processing_status, add_ts, last_modify_ts)
+                VALUES
+                (:topic_id, :topic_name, :topic_description, :keywords, :extract_date,
+                 :relevance_score, :news_count, :processing_status, :add_ts, :last_modify_ts)
                 """
             ),
-            {"d": target_date, "topic_id": topic_id},
-        ).first()
+            {
+                "topic_id": topic_id,
+                "topic_name": topic_name,
+                "topic_description": topic_description,
+                "keywords": kw_json,
+                "extract_date": target_date,
+                "relevance_score": 1.0,
+                "news_count": 0,
+                "processing_status": "completed",
+                "add_ts": now_ts,
+                "last_modify_ts": now_ts,
+            },
+        )
+        return
 
-        if row:
+    # append: 合并到同一天同 topic_id 的记录，不存在就新建
+    row = conn.execute(
+        text(
+            """
+            SELECT keywords
+            FROM daily_topics
+            WHERE extract_date = :d AND topic_id = :topic_id
+            LIMIT 1
+            """
+        ),
+        {"d": target_date, "topic_id": topic_id},
+    ).first()
+
+    if row:
+        existing = []
+        try:
+            existing = json.loads(row[0]) if row[0] else []
+        except Exception:
             existing = []
-            try:
-                existing = json.loads(row[0]) if row[0] else []
-            except Exception:
-                existing = []
 
-            merged = []
-            seen = set()
-            for kw in list(existing) + keywords:
-                k = normalize_text(kw)
-                if k and k not in seen:
-                    seen.add(k)
-                    merged.append(k)
+        merged = []
+        seen = set()
+        for kw in list(existing) + keywords:
+            k = normalize_text(kw)
+            if k and k not in seen:
+                seen.add(k)
+                merged.append(k)
 
-            conn.execute(
-                text(
-                    """
-                    UPDATE daily_topics
-                    SET keywords = :keywords,
-                        topic_name = :topic_name,
-                        topic_description = :topic_description,
-                        processing_status = :processing_status,
-                        last_modify_ts = :last_modify_ts
-                    WHERE extract_date = :d AND topic_id = :topic_id
-                    """
-                ),
-                {
-                    "keywords": json.dumps(merged, ensure_ascii=False),
-                    "topic_name": topic_name,
-                    "topic_description": topic_description,
-                    "processing_status": "completed",
-                    "last_modify_ts": now_ts,
-                    "d": target_date,
-                    "topic_id": topic_id,
-                },
-            )
-        else:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO daily_topics
-                    (topic_id, topic_name, topic_description, keywords, extract_date,
-                     relevance_score, news_count, processing_status, add_ts, last_modify_ts)
-                    VALUES
-                    (:topic_id, :topic_name, :topic_description, :keywords, :extract_date,
-                     :relevance_score, :news_count, :processing_status, :add_ts, :last_modify_ts)
-                    """
-                ),
-                {
-                    "topic_id": topic_id,
-                    "topic_name": topic_name,
-                    "topic_description": topic_description,
-                    "keywords": kw_json,
-                    "extract_date": target_date,
-                    "relevance_score": 1.0,
-                    "news_count": 0,
-                    "processing_status": "completed",
-                    "add_ts": now_ts,
-                    "last_modify_ts": now_ts,
-                },
-            )
+        conn.execute(
+            text(
+                """
+                UPDATE daily_topics
+                SET keywords = :keywords,
+                    topic_name = :topic_name,
+                    topic_description = :topic_description,
+                    processing_status = :processing_status,
+                    last_modify_ts = :last_modify_ts
+                WHERE extract_date = :d AND topic_id = :topic_id
+                """
+            ),
+            {
+                "keywords": json.dumps(merged, ensure_ascii=False),
+                "topic_name": topic_name,
+                "topic_description": topic_description,
+                "processing_status": "completed",
+                "last_modify_ts": now_ts,
+                "d": target_date,
+                "topic_id": topic_id,
+            },
+        )
+        return
+
+    conn.execute(
+        text(
+            """
+            INSERT INTO daily_topics
+            (topic_id, topic_name, topic_description, keywords, extract_date,
+             relevance_score, news_count, processing_status, add_ts, last_modify_ts)
+            VALUES
+            (:topic_id, :topic_name, :topic_description, :keywords, :extract_date,
+             :relevance_score, :news_count, :processing_status, :add_ts, :last_modify_ts)
+            """
+        ),
+        {
+            "topic_id": topic_id,
+            "topic_name": topic_name,
+            "topic_description": topic_description,
+            "keywords": kw_json,
+            "extract_date": target_date,
+            "relevance_score": 1.0,
+            "news_count": 0,
+            "processing_status": "completed",
+            "add_ts": now_ts,
+            "last_modify_ts": now_ts,
+        },
+    )
 
 
 def show_preview(keywords: Sequence[str], preview: int) -> None:
@@ -361,49 +444,97 @@ def show_preview(keywords: Sequence[str], preview: int) -> None:
 
 def main() -> None:
     args = parse_args()
-    target_date = (
-        datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else date.today()
-    )
     input_path = resolve_input_path(args.input)
 
     raw_df = read_table(input_path)
     df = apply_filters(raw_df, args.theme, args.subtheme, args.third_theme)
-    keywords = extract_keywords(df, args.max_keywords)
-
-    if not keywords:
-        raise RuntimeError("过滤后没有可导入的关键词，请放宽筛选条件或检查语料列名。")
-
-    topic_id = args.topic_id or make_topic_id(args.topic_name, target_date)
     filter_hint = {
         "theme": normalize_list(args.theme),
         "subtheme": normalize_list(args.subtheme),
         "third_theme": normalize_list(args.third_theme),
     }
-    topic_description = (
-        f"由 import_language_keywords.py 导入。source={input_path.name}; "
-        f"rows={len(df)}; filters={json.dumps(filter_hint, ensure_ascii=False)}"
-    )
 
     print(f"输入文件: {input_path}")
-    print(f"目标日期: {target_date}")
     print(f"写入模式: {args.mode}")
-    print(f"topic_id: {topic_id}")
-    print(f"topic_name: {args.topic_name}")
-    show_preview(keywords, args.preview)
+    print(f"date-mode: {args.date_mode}")
+
+    if args.date_mode == "fixed":
+        target_date = parse_iso_date(args.date) if args.date else date.today()
+        keywords = extract_keywords(df, args.max_keywords)
+        if not keywords:
+            raise RuntimeError("过滤后没有可导入的关键词，请放宽筛选条件或检查语料列名。")
+        topic_id = args.topic_id or make_topic_id(args.topic_name, target_date)
+        topic_description = (
+            f"由 import_language_keywords.py 导入（fixed）。source={input_path.name}; "
+            f"rows={len(df)}; filters={json.dumps(filter_hint, ensure_ascii=False)}"
+        )
+
+        print(f"目标日期: {target_date}")
+        print(f"topic_id: {topic_id}")
+        print(f"topic_name: {args.topic_name}")
+        show_preview(keywords, args.preview)
+        if args.dry_run:
+            print("dry-run 模式：未写入数据库。")
+            return
+
+        engine = build_engine()
+        with engine.begin() as conn:
+            upsert_daily_topics(
+                conn,
+                target_date=target_date,
+                topic_id=topic_id,
+                topic_name=args.topic_name,
+                topic_description=topic_description,
+                keywords=keywords,
+                mode=args.mode,
+            )
+        print("写入完成。")
+        return
+
+    start_date = parse_iso_date(args.start_date) if args.start_date else None
+    end_date = parse_iso_date(args.end_date) if args.end_date else None
+    date_keywords = extract_keywords_by_date(
+        df,
+        time_column=args.time_column,
+        max_keywords=args.max_keywords,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if not date_keywords:
+        raise RuntimeError("按行时间分桶后没有可写入关键词，请检查时间列或日期区间。")
+
+    sorted_dates = sorted(date_keywords.keys())
+    print(f"覆盖日期数: {len(sorted_dates)}")
+    print(f"日期范围: {sorted_dates[0]} ~ {sorted_dates[-1]}")
+    for d in sorted_dates[: min(5, len(sorted_dates))]:
+        print(f"- {d}: {len(date_keywords[d])} 个关键词")
+        show_preview(date_keywords[d], min(args.preview, 5))
+    if len(sorted_dates) > 5:
+        print(f"... 其余 {len(sorted_dates) - 5} 天省略")
 
     if args.dry_run:
         print("dry-run 模式：未写入数据库。")
         return
 
-    upsert_daily_topics(
-        target_date=target_date,
-        topic_id=topic_id,
-        topic_name=args.topic_name,
-        topic_description=topic_description,
-        keywords=keywords,
-        mode=args.mode,
-    )
-    print("写入完成。")
+    engine = build_engine()
+    with engine.begin() as conn:
+        for d in sorted_dates:
+            topic_id = args.topic_id or make_topic_id(args.topic_name, d)
+            topic_description = (
+                f"由 import_language_keywords.py 导入（from-row-time）。source={input_path.name}; "
+                f"rows={len(df)}; filters={json.dumps(filter_hint, ensure_ascii=False)}; "
+                f"time_column={args.time_column}"
+            )
+            upsert_daily_topics(
+                conn,
+                target_date=d,
+                topic_id=topic_id,
+                topic_name=args.topic_name,
+                topic_description=topic_description,
+                keywords=date_keywords[d],
+                mode=args.mode,
+            )
+    print(f"写入完成，共处理 {len(sorted_dates)} 天。")
 
 
 if __name__ == "__main__":
