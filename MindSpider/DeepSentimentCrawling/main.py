@@ -56,6 +56,9 @@ class DeepSentimentCrawling:
         # 1. 获取关键词摘要
         summary = self.keyword_manager.get_crawling_summary(target_date)
         print(f"📊 关键词摘要: {summary}")
+        topic_id = summary.get("topic_id")
+        if topic_id:
+            print(f"🔗 关联 topic_id: {topic_id}")
         
         if not summary['has_data']:
             print("⚠️ 没有找到话题数据，无法进行爬取")
@@ -78,13 +81,14 @@ class DeepSentimentCrawling:
         # 3. 执行全平台关键词爬取
         print(f"\n🔄 开始全平台关键词爬取...")
         crawl_results = self.platform_crawler.run_multi_platform_crawl_by_keywords(
-            keywords, platforms, login_type, max_notes_per_platform
+            keywords, platforms, login_type, max_notes_per_platform, topic_id=topic_id
         )
         
         # 4. 生成最终报告
         final_report = {
             "date": target_date.isoformat(),
             "summary": summary,
+            "topic_id": topic_id,
             "crawl_results": crawl_results,
             "success": crawl_results["successful_tasks"] > 0
         }

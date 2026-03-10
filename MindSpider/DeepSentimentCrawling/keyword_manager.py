@@ -292,6 +292,7 @@ class KeywordManager:
             return {
                 'date': target_date,
                 'keywords_count': len(topics_data.get('keywords', [])),
+                'topic_id': topics_data.get('topic_id'),
                 'summary': topics_data.get('summary', ''),
                 'has_data': True
             }

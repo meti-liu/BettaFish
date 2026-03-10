@@ -235,8 +235,9 @@ postgres_db_config = {{
             logger.exception(f"创建基础配置失败: {e}")
             return False
     
-    def run_crawler(self, platform: str, keywords: List[str], 
-                   login_type: str = "qrcode", max_notes: int = 50) -> Dict:
+    def run_crawler(self, platform: str, keywords: List[str],
+                   login_type: str = "qrcode", max_notes: int = 50,
+                   topic_id: Optional[str] = None) -> Dict:
         """
         运行爬虫
         
@@ -257,6 +258,8 @@ postgres_db_config = {{
         
         start_message = f"\n开始爬取平台: {platform}"
         start_message += f"\n关键词: {keywords[:5]}{'...' if len(keywords) > 5 else ''} (共{len(keywords)}个)"
+        if topic_id:
+            start_message += f"\n关联topic_id: {topic_id}"
         logger.info(start_message)
         
         start_time = datetime.now()
@@ -288,9 +291,13 @@ postgres_db_config = {{
             logger.info(f"执行命令: {' '.join(cmd)}")
             
             # 切换到MediaCrawler目录并执行
+            env = os.environ.copy()
+            if topic_id:
+                env["MEDIACRAWLER_TOPIC_ID"] = topic_id
             result = subprocess.run(
                 cmd,
                 cwd=self.mediacrawler_path,
+                env=env,
                 timeout=3600  # 60分钟超时
             )
             
@@ -367,7 +374,8 @@ postgres_db_config = {{
         return stats
     
     def run_multi_platform_crawl_by_keywords(self, keywords: List[str], platforms: List[str],
-                                            login_type: str = "qrcode", max_notes_per_keyword: int = 50) -> Dict:
+                                            login_type: str = "qrcode", max_notes_per_keyword: int = 50,
+                                            topic_id: Optional[str] = None) -> Dict:
         """
         基于关键词的多平台爬取 - 每个关键词在所有平台上都进行爬取
         
@@ -387,6 +395,8 @@ postgres_db_config = {{
         start_message += f"\n   登录方式: {login_type}"
         start_message += f"\n   每个关键词在每个平台的最大爬取数量: {max_notes_per_keyword}"
         start_message += f"\n   总爬取任务: {len(keywords)} × {len(platforms)} = {len(keywords) * len(platforms)}"
+        if topic_id:
+            start_message += f"\n   关联 topic_id: {topic_id}"
         logger.info(start_message)
         
         total_stats = {
@@ -417,7 +427,13 @@ postgres_db_config = {{
             
             try:
                 # 一次性传递所有关键词给平台
-                result = self.run_crawler(platform, keywords, login_type, max_notes_per_keyword)
+                result = self.run_crawler(
+                    platform,
+                    keywords,
+                    login_type,
+                    max_notes_per_keyword,
+                    topic_id=topic_id,
+                )
                 
                 if result.get("success"):
                     total_stats["successful_tasks"] += len(keywords)
