@@ -218,13 +218,15 @@ def build_region_risk_map_html(map_data: List[Dict], title: str) -> str:
         "title": {"text": title, "left": "center"},
         "tooltip": {"trigger": "item", "formatter": "{b}<br/>地区风险指数: {c}"},
         "visualMap": {
-            "min": 0,
-            "max": max_value,
+            "type": "piecewise",
             "left": "left",
             "bottom": 20,
-            "text": ["高风险", "低风险"],
-            "calculable": True,
-            "inRange": {"color": ["#e6fffb", "#87e8de", "#ffec3d", "#ff7875", "#cf1322"]},
+            "pieces": [
+                {"min": 80, "label": "高危(>=80)", "color": "#cf1322"},
+                {"min": 60, "max": 79.99, "label": "警告(60-80)", "color": "#ff7875"},
+                {"min": 40, "max": 59.99, "label": "关注(40-60)", "color": "#ffe58f"},
+                {"min": 0, "max": 39.99, "label": "安全(<40)", "color": "#b7eb8f"},
+            ],
         },
         "series": [{"name": "地区风险", "type": "map", "map": "china", "roam": True, "data": map_data}],
     }
@@ -375,10 +377,33 @@ def compute_region_risk(rows: List[Dict], note_df: pd.DataFrame) -> pd.DataFrame
     return agg
 
 
+def build_region_risk_detail(rows: List[Dict], note_df: pd.DataFrame) -> pd.DataFrame:
+    if not rows or note_df.empty:
+        return pd.DataFrame()
+    comments_df = pd.DataFrame(rows).copy()
+    comments_df["topic"] = comments_df["topic"].astype(str).str.strip()
+    comments_df["note_key"] = comments_df["note_key"].astype(str)
+    comments_df["province"] = comments_df["ip_location"].fillna("").apply(normalize_ip_location)
+    comments_df["comment_time"] = pd.to_numeric(comments_df["comment_time"], errors="coerce").fillna(0)
+    ms_mask = comments_df["comment_time"] > 1_000_000_000_000
+    comments_df.loc[ms_mask, "comment_time"] = comments_df.loc[ms_mask, "comment_time"] / 1000
+    comments_df["comment_date"] = pd.to_datetime(comments_df["comment_time"], unit="s", errors="coerce").dt.date
+    comments_df = comments_df[comments_df["province"].notna()].copy()
+    if comments_df.empty:
+        return pd.DataFrame()
+
+    note_key_df = note_df[["platform", "topic", "note_key", "ri_score"]].copy()
+    note_key_df["topic"] = note_key_df["topic"].astype(str).str.strip()
+    note_key_df["note_key"] = note_key_df["note_key"].astype(str)
+    merged = comments_df.merge(note_key_df, on=["platform", "topic", "note_key"], how="left")
+    merged["ri_score"] = pd.to_numeric(merged["ri_score"], errors="coerce").fillna(0.0)
+    return merged
+
+
 def main():
     st.set_page_config(page_title="RI 风险驾驶舱", layout="wide")
-    st.title("RI 风险驾驶舱（非地理维度）")
-    st.caption("更适合回答“话题本身有多危险”，而不是“哪个地区更危险”。")
+    st.title("RI 风险驾驶舱")
+    st.caption("画面一：全国语情风险热力图 + 高危事件Top10 + 风险变化趋势。")
 
     env = load_env()
     if not env:
@@ -416,17 +441,124 @@ def main():
     if topic_df.empty:
         st.warning("未计算出有效 RI 数据。")
         return
+    region_detail_df = build_region_risk_detail(rows, note_df)
     region_df = compute_region_risk(rows, note_df)
 
+    theme_options = sorted(topic_df["topic"].dropna().astype(str).unique().tolist())
+    selected_themes = st.multiselect("主题筛选（可多选）", options=theme_options, default=[])
+
+    province_options = sorted(region_detail_df["province"].dropna().astype(str).unique().tolist()) if not region_detail_df.empty else []
+    selected_provinces = st.multiselect("省份筛选（可多选）", options=province_options, default=[])
+
+    filtered_topic_df = topic_df.copy()
+    filtered_detail_df = region_detail_df.copy()
+    if selected_themes:
+        filtered_topic_df = filtered_topic_df[filtered_topic_df["topic"].isin(selected_themes)].copy()
+        if not filtered_detail_df.empty:
+            filtered_detail_df = filtered_detail_df[filtered_detail_df["topic"].isin(selected_themes)].copy()
+    if selected_provinces and not filtered_detail_df.empty:
+        filtered_detail_df = filtered_detail_df[filtered_detail_df["province"].isin(selected_provinces)].copy()
+        allowed_topic_keys = set(zip(filtered_detail_df["platform"], filtered_detail_df["topic"]))
+        filtered_topic_df = filtered_topic_df[
+            filtered_topic_df.apply(lambda r: (r["platform"], r["topic"]) in allowed_topic_keys, axis=1)
+        ].copy()
+
+    if filtered_topic_df.empty:
+        st.warning("筛选后无可用风险数据，请调整主题/省份筛选条件。")
+        return
+
+    filtered_region_df = pd.DataFrame()
+    if not filtered_detail_df.empty:
+        filtered_region_df = (
+            filtered_detail_df.groupby("province", as_index=False)
+            .agg(comment_count=("note_key", "count"), region_ri=("ri_score", "mean"))
+            .sort_values("region_ri", ascending=False)
+        )
+        count_norm = normalize_to_0_1(filtered_region_df["comment_count"].astype(float).tolist(), use_log=True)
+        filtered_region_df["coverage_factor"] = [v * 100 for v in count_norm]
+        filtered_region_df["region_risk_score"] = (
+            0.7 * filtered_region_df["region_ri"] + 0.3 * filtered_region_df["coverage_factor"]
+        ).round(2)
+
+    # 风险事件数量与变化趋势
+    trend_notes = note_df.copy()
+    trend_notes["topic"] = trend_notes["topic"].astype(str)
+    if selected_themes:
+        trend_notes = trend_notes[trend_notes["topic"].isin(selected_themes)].copy()
+    if selected_provinces and not filtered_detail_df.empty:
+        allowed_notes = set(filtered_detail_df["note_key"].astype(str).unique().tolist())
+        trend_notes = trend_notes[trend_notes["note_key"].astype(str).isin(allowed_notes)].copy()
+    daily_risk = (
+        trend_notes.groupby("note_date", as_index=False)
+        .agg(
+            high_risk_count=("ri_score", lambda s: int((s >= 80).sum())),
+            warning_count=("ri_score", lambda s: int(((s >= 60) & (s < 80)).sum())),
+            attention_count=("ri_score", lambda s: int(((s >= 40) & (s < 60)).sum())),
+            total_notes=("ri_score", "count"),
+        )
+        .sort_values("note_date")
+    )
+
+    current_high_risk = int((filtered_topic_df["RI"] >= 80).sum())
+    current_warning = int(((filtered_topic_df["RI"] >= 60) & (filtered_topic_df["RI"] < 80)).sum())
+    current_attention = int(((filtered_topic_df["RI"] >= 40) & (filtered_topic_df["RI"] < 60)).sum())
+
+    delta_high = None
+    if len(daily_risk) >= 2:
+        delta_high = int(daily_risk.iloc[-1]["high_risk_count"] - daily_risk.iloc[-2]["high_risk_count"])
+
     a, b, c = st.columns(3)
-    a.metric("话题数", f"{len(topic_df)}")
-    b.metric("评论样本", f"{len(rows)}")
-    c.metric("平均 RI", f"{topic_df['RI'].mean():.2f}")
+    a.metric("高危事件数 (RI>=80)", f"{current_high_risk}", delta=None if delta_high is None else delta_high)
+    b.metric("警告事件数 (60<=RI<80)", f"{current_warning}")
+    c.metric("关注事件数 (40<=RI<60)", f"{current_attention}")
+
+    st.subheader("画面一：全国语情风险热力图")
+    if filtered_region_df.empty:
+        st.info("当前筛选条件下缺少可识别地区数据。")
+    else:
+        map_data = [
+            {"name": r["province"], "value": float(r["region_risk_score"])}
+            for _, r in filtered_region_df.iterrows()
+        ]
+        map_title = "全国语情风险分布（可按平台/主题/省份筛选）"
+        components.html(build_region_risk_map_html(map_data, map_title), height=680, scrolling=False)
+
+    r1, r2 = st.columns([3, 2])
+    with r1:
+        st.subheader("风险事件数量趋势")
+        if daily_risk.empty:
+            st.caption("暂无趋势数据。")
+        else:
+            trend_plot = daily_risk.melt(
+                id_vars=["note_date"],
+                value_vars=["high_risk_count", "warning_count", "attention_count"],
+                var_name="risk_type",
+                value_name="count",
+            )
+            fig_trend = px.line(
+                trend_plot,
+                x="note_date",
+                y="count",
+                color="risk_type",
+                markers=True,
+                title="高危/警告/关注 事件数量变化",
+                height=360,
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+    with r2:
+        st.subheader("高危事件排行榜 Top10")
+        top10 = filtered_topic_df.sort_values("RI", ascending=False).head(10).copy()
+        top10.insert(0, "排名", range(1, len(top10) + 1))
+        st.dataframe(
+            top10[["排名", "platform", "topic", "RI", "风险等级", "热度", "评论数"]],
+            width="stretch",
+            hide_index=True,
+        )
 
     st.subheader("风险矩阵气泡图")
     st.caption("横轴=传播速度分，纵轴=恶意度分，气泡大小=热度，颜色=RI。")
     fig_matrix = px.scatter(
-        topic_df,
+        filtered_topic_df,
         x="传播速度分",
         y="恶意度分",
         size="气泡大小",
@@ -443,7 +575,7 @@ def main():
     col1, col2 = st.columns([3, 2])
     with col1:
         st.subheader("高风险话题趋势（Top5）")
-        top_topics = topic_df.sort_values("RI", ascending=False).head(5)[["platform", "topic"]]
+        top_topics = filtered_topic_df.sort_values("RI", ascending=False).head(5)[["platform", "topic"]]
         top_set = {(r["platform"], r["topic"]) for _, r in top_topics.iterrows()}
         trend_df = note_df[note_df.apply(lambda r: (r["platform"], r["topic"]) in top_set, axis=1)].copy()
         trend_df["主题"] = trend_df["platform"] + " | " + trend_df["topic"]
@@ -462,13 +594,13 @@ def main():
 
     with col2:
         st.subheader("风险等级分布")
-        dist = topic_df["风险等级"].value_counts().reset_index()
+        dist = filtered_topic_df["风险等级"].value_counts().reset_index()
         dist.columns = ["风险等级", "话题数"]
         fig_bar = px.bar(dist, x="风险等级", y="话题数", color="风险等级", height=420)
         st.plotly_chart(fig_bar, use_container_width=True)
 
     st.subheader("高风险排行榜")
-    rank_df = topic_df.sort_values("RI", ascending=False).head(30).copy()
+    rank_df = filtered_topic_df.sort_values("RI", ascending=False).head(30).copy()
     rank_df.insert(0, "排名", range(1, len(rank_df) + 1))
     st.dataframe(
         rank_df[["排名", "platform", "topic", "RI", "风险等级", "热度", "帖子数", "评论数", "传播速度分", "恶意度分"]],
@@ -493,13 +625,14 @@ def main():
 
     st.subheader("地区风险地图（RI 视角）")
     st.caption("这不是热度地图，而是地区内评论所关联话题的风险强度聚合，适合识别“定向攻击区域”。")
-    if region_df.empty:
+    display_region_df = filtered_region_df if not filtered_region_df.empty else region_df
+    if display_region_df.empty:
         st.info("当前筛选下缺少可识别地区的评论数据。")
     else:
-        map_data = [{"name": r["province"], "value": float(r["region_risk_score"])} for _, r in region_df.iterrows()]
+        map_data = [{"name": r["province"], "value": float(r["region_risk_score"])} for _, r in display_region_df.iterrows()]
         components.html(build_region_risk_map_html(map_data, "全国地区风险指数分布"), height=680, scrolling=False)
         st.dataframe(
-            region_df.rename(
+            display_region_df.rename(
                 columns={
                     "province": "地区",
                     "comment_count": "评论数",
