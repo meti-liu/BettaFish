@@ -33,9 +33,11 @@ DEFAULT_CANDIDATES = [
     DEFAULT_DATA_DIR / "自建语料库.xlsx",
 ]
 
-KEYWORD_COLUMNS = ["检索词", "话题"]
+# 业务要求：daily_topics 仅写“话题”，不混入“检索词”。
+KEYWORD_COLUMNS = ["话题"]
 FILTER_COLUMNS = ["主题", "次主题", "次次主题"]
 DEFAULT_TIME_COLUMN = "时间"
+DEFAULT_EXCLUDED_KEYWORDS = {"中文", "普通话", "姓名"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,6 +123,12 @@ def parse_args() -> argparse.Namespace:
         help="最多写入关键词数量，默认500",
     )
     parser.add_argument(
+        "--exclude-keyword",
+        action="append",
+        default=[],
+        help="排除关键词，可重复传入；默认会排除：中文/普通话/姓名",
+    )
+    parser.add_argument(
         "--preview",
         type=int,
         default=20,
@@ -191,6 +199,14 @@ def normalize_list(values: Sequence[str]) -> List[str]:
     return out
 
 
+def build_excluded_keywords(extra: Sequence[str]) -> set[str]:
+    return set(DEFAULT_EXCLUDED_KEYWORDS) | set(normalize_list(extra))
+
+
+def is_excluded_keyword(token: str, excluded: set[str]) -> bool:
+    return normalize_text(token) in excluded
+
+
 def apply_filters(df: pd.DataFrame, themes: Sequence[str], subthemes: Sequence[str], third: Sequence[str]) -> pd.DataFrame:
     filtered = df.copy()
 
@@ -208,7 +224,7 @@ def apply_filters(df: pd.DataFrame, themes: Sequence[str], subthemes: Sequence[s
     return filtered
 
 
-def extract_keywords(df: pd.DataFrame, max_keywords: int) -> List[str]:
+def extract_keywords(df: pd.DataFrame, max_keywords: int, excluded_keywords: set[str]) -> List[str]:
     seen = set()
     keywords: List[str] = []
 
@@ -219,6 +235,8 @@ def extract_keywords(df: pd.DataFrame, max_keywords: int) -> List[str]:
     for col in columns:
         for raw in df[col].tolist():
             token = normalize_text(raw)
+            if is_excluded_keyword(token, excluded_keywords):
+                continue
             if token and token not in seen:
                 seen.add(token)
                 keywords.append(token)
@@ -235,7 +253,26 @@ def to_date_safe(raw: object) -> date | None:
     text_value = normalize_text(raw)
     if not text_value:
         return None
-    ts = pd.to_datetime(text_value, errors="coerce")
+
+    # 优先按常见混合格式精确解析，避免 12/12/2021 等歧义导致误判。
+    known_formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y",
+    ]
+    for fmt in known_formats:
+        try:
+            return datetime.strptime(text_value, fmt).date()
+        except ValueError:
+            continue
+
+    ts = pd.to_datetime(text_value, errors="coerce", dayfirst=False, yearfirst=False)
     if pd.isna(ts):
         return None
     return ts.date()
@@ -254,6 +291,7 @@ def extract_keywords_by_date(
     max_keywords: int,
     start_date: date | None,
     end_date: date | None,
+    excluded_keywords: set[str],
 ) -> Dict[date, List[str]]:
     if time_column not in df.columns:
         raise ValueError(f"未找到时间列: {time_column}")
@@ -285,6 +323,8 @@ def extract_keywords_by_date(
 
         for col in keyword_cols:
             kw = normalize_text(row.get(col))
+            if is_excluded_keyword(kw, excluded_keywords):
+                continue
             if not kw or kw in seen:
                 continue
             seen.add(kw)
@@ -445,6 +485,7 @@ def show_preview(keywords: Sequence[str], preview: int) -> None:
 def main() -> None:
     args = parse_args()
     input_path = resolve_input_path(args.input)
+    excluded_keywords = build_excluded_keywords(args.exclude_keyword)
 
     raw_df = read_table(input_path)
     df = apply_filters(raw_df, args.theme, args.subtheme, args.third_theme)
@@ -460,7 +501,7 @@ def main() -> None:
 
     if args.date_mode == "fixed":
         target_date = parse_iso_date(args.date) if args.date else date.today()
-        keywords = extract_keywords(df, args.max_keywords)
+        keywords = extract_keywords(df, args.max_keywords, excluded_keywords)
         if not keywords:
             raise RuntimeError("过滤后没有可导入的关键词，请放宽筛选条件或检查语料列名。")
         topic_id = args.topic_id or make_topic_id(args.topic_name, target_date)
@@ -499,6 +540,7 @@ def main() -> None:
         max_keywords=args.max_keywords,
         start_date=start_date,
         end_date=end_date,
+        excluded_keywords=excluded_keywords,
     )
     if not date_keywords:
         raise RuntimeError("按行时间分桶后没有可写入关键词，请检查时间列或日期区间。")

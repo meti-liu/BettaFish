@@ -301,6 +301,7 @@ class MindSpider:
     
     def run_deep_sentiment_crawling(self, target_date: date = None, platforms: list = None,
                                    max_keywords: int = 50, max_notes: int = 50,
+                                   max_comments: int = 20,
                                    test_mode: bool = False) -> bool:
         """运行DeepSentimentCrawling模块"""
         logger.info("运行DeepSentimentCrawling模块...")
@@ -326,7 +327,8 @@ class MindSpider:
             
             cmd.extend([
                 "--max-keywords", str(max_keywords),
-                "--max-notes", str(max_notes)
+                "--max-notes", str(max_notes),
+                "--max-comments", str(max_comments),
             ])
             
             if test_mode:
@@ -356,7 +358,7 @@ class MindSpider:
     
     def run_complete_workflow(self, target_date: date = None, platforms: list = None,
                              keywords_count: int = 100, max_keywords: int = 50,
-                             max_notes: int = 50, test_mode: bool = False) -> bool:
+                             max_notes: int = 50, max_comments: int = 20, test_mode: bool = False) -> bool:
         """运行完整工作流程"""
         logger.info("开始完整的MindSpider工作流程")
         
@@ -379,7 +381,9 @@ class MindSpider:
         
         # 第二步：运行情感爬取
         logger.info("=== 第二步：情感爬取 ===")
-        if not self.run_deep_sentiment_crawling(target_date, platforms, max_keywords, max_notes, test_mode):
+        if not self.run_deep_sentiment_crawling(
+            target_date, platforms, max_keywords, max_notes, max_comments, test_mode
+        ):
             logger.error("情感爬取失败，但话题提取已完成")
             return False
         
@@ -494,6 +498,7 @@ def main():
     parser.add_argument("--keywords-count", type=int, default=100, help="话题提取的关键词数量")
     parser.add_argument("--max-keywords", type=int, default=50, help="每个平台最大关键词数量")
     parser.add_argument("--max-notes", type=int, default=50, help="每个关键词最大爬取内容数量")
+    parser.add_argument("--max-comments", type=int, default=20, help="每条内容最大评论抓取数量")
     parser.add_argument("--test", action="store_true", help="测试模式（少量数据）")
     
     args = parser.parse_args()
@@ -537,19 +542,19 @@ def main():
             spider.run_broad_topic_extraction(target_date, args.keywords_count)
         elif args.deep_sentiment:
             spider.run_deep_sentiment_crawling(
-                target_date, args.platforms, args.max_keywords, args.max_notes, args.test
+                target_date, args.platforms, args.max_keywords, args.max_notes, args.max_comments, args.test
             )
         elif args.complete:
             spider.run_complete_workflow(
                 target_date, args.platforms, args.keywords_count, 
-                args.max_keywords, args.max_notes, args.test
+                args.max_keywords, args.max_notes, args.max_comments, args.test
             )
         else:
             # 默认运行完整工作流程
             logger.info("运行完整MindSpider工作流程...")
             spider.run_complete_workflow(
                 target_date, args.platforms, args.keywords_count,
-                args.max_keywords, args.max_notes, args.test
+                args.max_keywords, args.max_notes, args.max_comments, args.test
             )
     
     except KeyboardInterrupt:

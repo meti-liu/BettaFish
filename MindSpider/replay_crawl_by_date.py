@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-keywords", type=int, default=20, help="每平台关键词上限")
     parser.add_argument("--max-notes", type=int, default=20, help="每平台内容上限")
+    parser.add_argument("--max-comments", type=int, default=20, help="每条内容评论上限")
     parser.add_argument("--test", action="store_true", help="测试模式")
     parser.add_argument("--dry-run", action="store_true", help="仅展示将执行的日期")
     parser.add_argument(
@@ -84,7 +85,16 @@ def run_for_date(args: argparse.Namespace, target_date: date) -> int:
     cmd = [sys.executable, "main.py", "--deep-sentiment", "--date", target_date.isoformat()]
     if args.platforms:
         cmd.extend(["--platforms"] + args.platforms)
-    cmd.extend(["--max-keywords", str(args.max_keywords), "--max-notes", str(args.max_notes)])
+    cmd.extend(
+        [
+            "--max-keywords",
+            str(args.max_keywords),
+            "--max-notes",
+            str(args.max_notes),
+            "--max-comments",
+            str(args.max_comments),
+        ]
+    )
     if args.test:
         cmd.append("--test")
 
