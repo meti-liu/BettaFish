@@ -38,6 +38,17 @@ def parse_args() -> argparse.Namespace:
         choices=list(TABLE_CONFIG.keys()),
         help="要回填的表，默认 weibo_note",
     )
+    parser.add_argument(
+        "--date-window-days",
+        type=int,
+        default=0,
+        help="按日期匹配时允许的天数偏移，0表示必须同一天",
+    )
+    parser.add_argument(
+        "--ignore-date",
+        action="store_true",
+        help="仅按关键词回填topic_id，不限制日期（慎用）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只统计不更新")
     return parser.parse_args()
 
@@ -82,16 +93,32 @@ def fetch_daily_topics(cur, start: str, end: str) -> List[Tuple[str, str, List[s
     return out
 
 
-def update_one_table(cur, table: str, date_str: str, topic_id: str, keywords: List[str], dry_run: bool) -> int:
+def update_one_table(
+    cur,
+    table: str,
+    date_str: str,
+    topic_id: str,
+    keywords: List[str],
+    dry_run: bool,
+    date_window_days: int,
+    ignore_date: bool,
+) -> int:
     ts_expr = TABLE_CONFIG[table]
     placeholders = ",".join(["%s"] * len(keywords))
-    where_clause = (
-        f"(topic_id IS NULL OR topic_id = '') "
-        f"AND source_keyword IN ({placeholders}) "
-        f"AND {ts_expr} = %s"
-    )
+    where_parts = [
+        "(topic_id IS NULL OR topic_id = '')",
+        f"source_keyword IN ({placeholders})",
+    ]
+    params = list(keywords)
+    if not ignore_date:
+        if date_window_days > 0:
+            where_parts.append(f"ABS(DATEDIFF({ts_expr}, %s)) <= %s")
+            params.extend([date_str, date_window_days])
+        else:
+            where_parts.append(f"{ts_expr} = %s")
+            params.append(date_str)
+    where_clause = " AND ".join(where_parts)
     count_sql = f"SELECT COUNT(1) FROM {table} WHERE {where_clause}"
-    params = keywords + [date_str]
     cur.execute(count_sql, params)
     matched = int(cur.fetchone()[0] or 0)
     if dry_run or matched == 0:
@@ -129,7 +156,16 @@ def main() -> None:
     total_updated = 0
     for date_str, topic_id, keywords in topics:
         for table in args.tables:
-            affected = update_one_table(cur, table, date_str, topic_id, keywords, args.dry_run)
+            affected = update_one_table(
+                cur,
+                table,
+                date_str,
+                topic_id,
+                keywords,
+                args.dry_run,
+                args.date_window_days,
+                args.ignore_date,
+            )
             total_updated += affected
             action = "match" if args.dry_run else "updated"
             print(f"{table} {date_str} topic_id={topic_id} {action}={affected}")

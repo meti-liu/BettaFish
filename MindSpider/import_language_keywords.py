@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import time
@@ -38,6 +39,15 @@ KEYWORD_COLUMNS = ["话题"]
 FILTER_COLUMNS = ["主题", "次主题", "次次主题"]
 DEFAULT_TIME_COLUMN = "时间"
 DEFAULT_EXCLUDED_KEYWORDS = {"中文", "普通话", "姓名"}
+PLATFORM_LINE_RANGES = {
+    "dy": [(5192, 6368)],
+    "xhs": [(8724, 9622)],
+}
+PLATFORM_CONTENT_TABLE = {
+    "wb": "weibo_note",
+    "dy": "douyin_aweme",
+    "xhs": "xhs_note",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,6 +121,24 @@ def parse_args() -> argparse.Namespace:
         help="按次次主题过滤，可重复传入",
     )
     parser.add_argument(
+        "--platform",
+        choices=["all", "wb", "dy", "xhs"],
+        default="all",
+        help="语料平台切片：all=全量；wb/dy/xhs=按平台子集",
+    )
+    parser.add_argument(
+        "--dedup-source",
+        choices=["none", "db"],
+        default="none",
+        help="关键词去重来源：none=不去重；db=基于数据库已有内容去重",
+    )
+    parser.add_argument(
+        "--dedup-days",
+        type=int,
+        default=0,
+        help="db去重时间窗口天数，0=全量历史",
+    )
+    parser.add_argument(
         "--mode",
         choices=["overwrite", "append"],
         default="overwrite",
@@ -172,6 +200,45 @@ def _read_csv_fallback(path: Path) -> pd.DataFrame:
     raise RuntimeError(f"读取CSV失败: {path}")
 
 
+def _read_text_fallback(path: Path) -> str:
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return path.read_text(encoding=enc)
+        except Exception:
+            continue
+    raise RuntimeError(f"读取文本失败: {path}")
+
+
+def _parse_section_csv(path: Path, start_line: int, end_line: int) -> pd.DataFrame:
+    lines = _read_text_fallback(path).splitlines()
+    chunk = lines[start_line - 1 : end_line]
+    chunk = [line for line in chunk if line.strip()]
+    if not chunk:
+        return pd.DataFrame()
+
+    reader = csv.reader(chunk)
+    rows = list(reader)
+    if not rows:
+        return pd.DataFrame()
+    header = [str(x).strip() for x in rows[0]]
+    data_rows = rows[1:]
+    clean_rows = []
+    for row in data_rows:
+        if len(row) < len(header):
+            row = row + [""] * (len(header) - len(row))
+        clean_rows.append(row[: len(header)])
+
+    df = pd.DataFrame(clean_rows, columns=header)
+    df = df.rename(
+        columns={
+            "关键词": "检索词",
+            "词条": "话题",
+            "链接": "话题链接",
+        }
+    )
+    return df
+
+
 def read_table(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix == ".csv":
@@ -181,6 +248,13 @@ def read_table(path: Path) -> pd.DataFrame:
     raise ValueError(f"不支持的文件类型: {path.suffix}")
 
 
+def read_table_by_platform(path: Path, platform: str) -> pd.DataFrame:
+    if path.suffix.lower() == ".csv" and platform in PLATFORM_LINE_RANGES:
+        start_line, end_line = PLATFORM_LINE_RANGES[platform][0]
+        return _parse_section_csv(path, start_line, end_line)
+    return read_table(path)
+
+
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
@@ -188,6 +262,11 @@ def normalize_text(value: object) -> str:
     if not text_value or text_value.lower() == "nan":
         return ""
     return text_value
+
+
+def normalize_token_for_match(value: object) -> str:
+    token = normalize_text(value).replace("#", "").lower()
+    return "".join(ch for ch in token if not ch.isspace())
 
 
 def normalize_list(values: Sequence[str]) -> List[str]:
@@ -224,6 +303,50 @@ def apply_filters(df: pd.DataFrame, themes: Sequence[str], subthemes: Sequence[s
     return filtered
 
 
+def _slice_by_line_ranges(df: pd.DataFrame, ranges: List[tuple[int, int]]) -> pd.DataFrame:
+    idx_parts = []
+    total = len(df)
+    for start_line, end_line in ranges:
+        start_idx = max(0, start_line - 2)
+        end_idx = min(total - 1, end_line - 2)
+        if start_idx <= end_idx:
+            idx_parts.append(df.iloc[start_idx : end_idx + 1])
+    if not idx_parts:
+        return df.iloc[0:0].copy()
+    return pd.concat(idx_parts, ignore_index=True)
+
+
+def filter_by_platform(df: pd.DataFrame, platform: str) -> pd.DataFrame:
+    if platform == "all":
+        return df.copy()
+
+    if "平台" in df.columns:
+        val_map = {
+            "wb": ["微博", "weibo", "wb"],
+            "dy": ["抖音", "douyin", "dy"],
+            "xhs": ["小红书", "xiaohongshu", "xhs"],
+        }
+        markers = [m.lower() for m in val_map[platform]]
+        col = df["平台"].astype(str).str.strip().str.lower()
+        return df[col.apply(lambda x: any(m in x for m in markers))].copy()
+
+    if platform in PLATFORM_LINE_RANGES:
+        return _slice_by_line_ranges(df, PLATFORM_LINE_RANGES[platform])
+
+    if platform == "wb":
+        mask = pd.Series(True, index=df.index)
+        total = len(df)
+        for ranges in PLATFORM_LINE_RANGES.values():
+            for start_line, end_line in ranges:
+                start_idx = max(0, start_line - 2)
+                end_idx = min(total - 1, end_line - 2)
+                if start_idx <= end_idx:
+                    mask.iloc[start_idx : end_idx + 1] = False
+        return df[mask].copy()
+
+    return df.copy()
+
+
 def extract_keywords(df: pd.DataFrame, max_keywords: int, excluded_keywords: set[str]) -> List[str]:
     seen = set()
     keywords: List[str] = []
@@ -243,6 +366,10 @@ def extract_keywords(df: pd.DataFrame, max_keywords: int, excluded_keywords: set
             if len(keywords) >= max_keywords:
                 return keywords
     return keywords
+
+
+def extract_all_keywords(df: pd.DataFrame, excluded_keywords: set[str]) -> List[str]:
+    return extract_keywords(df, max_keywords=10**9, excluded_keywords=excluded_keywords)
 
 
 def parse_iso_date(raw: str) -> date:
@@ -335,10 +462,15 @@ def extract_keywords_by_date(
     return {d: kws for d, kws in date_to_keywords.items() if kws}
 
 
-def make_topic_id(topic_name: str, target_date: date) -> str:
-    seed = f"{topic_name}-{target_date.isoformat()}"
+def make_topic_id(topic_name: str, target_date: date, platform: str = "all") -> str:
+    seed = f"{platform}|{topic_name}|{target_date.isoformat()}"
     h = hashlib.md5(seed.encode("utf-8")).hexdigest()[:12]
-    return f"lang_{target_date.strftime('%Y%m%d')}_{h}"
+    # wb 保持原有“按日”语义；dy/xhs 使用平台前缀，避免误导为“帖子发布时间=extract_date”
+    if platform == "wb":
+        return f"lang_{target_date.strftime('%Y%m%d')}_{h}"
+    if platform in ("dy", "xhs"):
+        return f"lang_{platform}_{h}"
+    return f"lang_{h}"
 
 
 def build_engine():
@@ -355,6 +487,81 @@ def build_engine():
             f"?charset={settings.DB_CHARSET}"
         )
     return create_engine(url, future=True)
+
+
+def _fetch_existing_keyword_set_from_db(engine, platform: str, dedup_days: int) -> set[str]:
+    table = PLATFORM_CONTENT_TABLE.get(platform)
+    if not table:
+        return set()
+
+    day_expr_map = {
+        "wb": "DATE(FROM_UNIXTIME(create_time + 28800))",
+        "dy": "DATE(FROM_UNIXTIME(CASE WHEN create_time > 20000000000 THEN create_time/1000 ELSE create_time END + 28800))",
+        "xhs": "DATE(FROM_UNIXTIME(CASE WHEN time > 20000000000 THEN time/1000 ELSE time END + 28800))",
+    }
+    day_expr = day_expr_map[platform]
+
+    where = "source_keyword IS NOT NULL AND source_keyword <> ''"
+    params = {}
+    if dedup_days > 0:
+        where += f" AND {day_expr} >= DATE_SUB(CURDATE(), INTERVAL :days DAY)"
+        params["days"] = dedup_days
+
+    sql = text(f"SELECT DISTINCT source_keyword FROM {table} WHERE {where}")
+    existing: set[str] = set()
+    with engine.connect() as conn:
+        for row in conn.execute(sql, params):
+            token = normalize_token_for_match(row[0])
+            if token:
+                existing.add(token)
+    existing |= _fetch_existing_keyword_set_from_daily_topics(engine, platform, dedup_days)
+    return existing
+
+
+def _fetch_existing_keyword_set_from_daily_topics(engine, platform: str, dedup_days: int) -> set[str]:
+    where_parts = []
+    params = {}
+    if platform in ("dy", "xhs"):
+        where_parts.append("topic_id LIKE :topic_prefix")
+        params["topic_prefix"] = f"lang_{platform}_%"
+    if dedup_days > 0:
+        where_parts.append("extract_date >= DATE_SUB(CURDATE(), INTERVAL :days DAY)")
+        params["days"] = dedup_days
+    where_clause = " AND ".join(where_parts)
+    if where_clause:
+        where_clause = "WHERE " + where_clause
+
+    sql = text(f"SELECT keywords FROM daily_topics {where_clause}")
+    existing: set[str] = set()
+    with engine.connect() as conn:
+        for row in conn.execute(sql, params):
+            raw = row[0]
+            if not raw:
+                continue
+            try:
+                arr = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(arr, list):
+                continue
+            for item in arr:
+                token = normalize_token_for_match(item)
+                if token:
+                    existing.add(token)
+    return existing
+
+
+def dedup_keywords_by_existing(candidates: Sequence[str], existing_tokens: set[str]) -> List[str]:
+    out: List[str] = []
+    for kw in candidates:
+        token = normalize_token_for_match(kw)
+        if not token:
+            continue
+        if token in existing_tokens:
+            continue
+        existing_tokens.add(token)
+        out.append(kw)
+    return out
 
 
 def upsert_daily_topics(conn, *, target_date: date, topic_id: str, topic_name: str, topic_description: str, keywords: List[str], mode: str) -> None:
@@ -479,7 +686,12 @@ def show_preview(keywords: Sequence[str], preview: int) -> None:
     if n > 0:
         print(f"预览前 {min(total, n)} 个关键词:")
         for idx, kw in enumerate(keywords[:n], start=1):
-            print(f"{idx:>3}. {kw}")
+            line = f"{idx:>3}. {kw}"
+            try:
+                print(line)
+            except UnicodeEncodeError:
+                # Windows GBK 控制台兼容兜底，避免预览阶段中断流程
+                print(line.encode("gbk", errors="replace").decode("gbk"))
 
 
 def main() -> None:
@@ -487,8 +699,12 @@ def main() -> None:
     input_path = resolve_input_path(args.input)
     excluded_keywords = build_excluded_keywords(args.exclude_keyword)
 
-    raw_df = read_table(input_path)
-    df = apply_filters(raw_df, args.theme, args.subtheme, args.third_theme)
+    raw_df = read_table_by_platform(input_path, args.platform)
+    if args.platform in PLATFORM_LINE_RANGES and input_path.suffix.lower() == ".csv":
+        platform_df = raw_df
+    else:
+        platform_df = filter_by_platform(raw_df, args.platform)
+    df = apply_filters(platform_df, args.theme, args.subtheme, args.third_theme)
     filter_hint = {
         "theme": normalize_list(args.theme),
         "subtheme": normalize_list(args.subtheme),
@@ -496,15 +712,33 @@ def main() -> None:
     }
 
     print(f"输入文件: {input_path}")
+    print(f"平台切片: {args.platform}")
     print(f"写入模式: {args.mode}")
     print(f"date-mode: {args.date_mode}")
+    print(f"dedup-source: {args.dedup_source}")
+
+    existing_tokens: set[str] = set()
+    engine = None
+    if args.dedup_source == "db":
+        if args.platform not in ("wb", "dy", "xhs"):
+            raise RuntimeError("db去重仅支持平台 wb/dy/xhs，请指定 --platform。")
+        engine = build_engine()
+        existing_tokens = _fetch_existing_keyword_set_from_db(engine, args.platform, args.dedup_days)
+        print(f"db去重基线数量: {len(existing_tokens)}")
 
     if args.date_mode == "fixed":
         target_date = parse_iso_date(args.date) if args.date else date.today()
-        keywords = extract_keywords(df, args.max_keywords, excluded_keywords)
+        keywords = extract_all_keywords(df, excluded_keywords)
+        if args.dedup_source == "db":
+            before = len(keywords)
+            keywords = dedup_keywords_by_existing(keywords, existing_tokens)
+            print(f"db去重过滤: {before} -> {len(keywords)}")
+        keywords = limit_keywords(keywords, args.max_keywords)
         if not keywords:
             raise RuntimeError("过滤后没有可导入的关键词，请放宽筛选条件或检查语料列名。")
-        topic_id = args.topic_id or make_topic_id(args.topic_name, target_date)
+        topic_id = args.topic_id or make_topic_id(
+            args.topic_name, target_date, args.platform
+        )
         topic_description = (
             f"由 import_language_keywords.py 导入（fixed）。source={input_path.name}; "
             f"rows={len(df)}; filters={json.dumps(filter_hint, ensure_ascii=False)}"
@@ -513,12 +747,17 @@ def main() -> None:
         print(f"目标日期: {target_date}")
         print(f"topic_id: {topic_id}")
         print(f"topic_name: {args.topic_name}")
+        if args.platform in ("dy", "xhs"):
+            print(
+                "提示: extract_date 仅用于任务分桶/调度，不代表 dy/xhs 帖子实际发布时间。"
+            )
         show_preview(keywords, args.preview)
         if args.dry_run:
             print("dry-run 模式：未写入数据库。")
             return
 
-        engine = build_engine()
+        if engine is None:
+            engine = build_engine()
         with engine.begin() as conn:
             upsert_daily_topics(
                 conn,
@@ -545,6 +784,16 @@ def main() -> None:
     if not date_keywords:
         raise RuntimeError("按行时间分桶后没有可写入关键词，请检查时间列或日期区间。")
 
+    if args.dedup_source == "db":
+        reduced: Dict[date, List[str]] = {}
+        for d in sorted(date_keywords.keys()):
+            kws = date_keywords[d]
+            filtered = dedup_keywords_by_existing(kws, existing_tokens)
+            reduced[d] = limit_keywords(filtered, args.max_keywords)
+        date_keywords = {d: kws for d, kws in reduced.items() if kws}
+        if not date_keywords:
+            raise RuntimeError("db去重后无可写入关键词。")
+
     sorted_dates = sorted(date_keywords.keys())
     print(f"覆盖日期数: {len(sorted_dates)}")
     print(f"日期范围: {sorted_dates[0]} ~ {sorted_dates[-1]}")
@@ -558,10 +807,11 @@ def main() -> None:
         print("dry-run 模式：未写入数据库。")
         return
 
-    engine = build_engine()
+    if engine is None:
+        engine = build_engine()
     with engine.begin() as conn:
         for d in sorted_dates:
-            topic_id = args.topic_id or make_topic_id(args.topic_name, d)
+            topic_id = args.topic_id or make_topic_id(args.topic_name, d, args.platform)
             topic_description = (
                 f"由 import_language_keywords.py 导入（from-row-time）。source={input_path.name}; "
                 f"rows={len(df)}; filters={json.dumps(filter_hint, ensure_ascii=False)}; "

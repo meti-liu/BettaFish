@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-将 Data/自建语料库 (1).csv 的人工标注字段回填到 weibo_note。
+将 Data/自建语料库 (1).csv 的人工标注字段回填到社媒内容表（wb/dy/xhs）。
 
 匹配策略（按优先级）：
 1) 同一天 + source_keyword 精确命中（检索词/话题）
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -21,10 +22,14 @@ import pymysql
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CSV = PROJECT_ROOT / "Data" / "自建语料库 (1).csv"
+PLATFORM_LINE_RANGES = {
+    "dy": [(5192, 6368)],
+    "xhs": [(8724, 9622)],
+}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="回填 weibo_note 语料标注字段")
+    parser = argparse.ArgumentParser(description="回填社媒内容表语料标注字段（wb/dy/xhs）")
     parser.add_argument("--input", type=str, default=str(DEFAULT_CSV), help="语料CSV路径")
     parser.add_argument("--start-date", type=str, default="", help="起始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, default="", help="结束日期 YYYY-MM-DD")
@@ -39,7 +44,14 @@ def parse_args() -> argparse.Namespace:
         type=str,
         choices=["topic-date", "note-day"],
         default="topic-date",
-        help="扫描weibo_note方式：topic-date=按topic_id所属daily_topics日期；note-day=按帖子创建日期",
+        help="扫描方式：topic-date=按topic_id所属daily_topics日期；note-day=按帖子创建日期",
+    )
+    parser.add_argument(
+        "--platform",
+        type=str,
+        choices=["wb", "dy", "xhs"],
+        default="wb",
+        help="目标平台：wb=微博，dy=抖音，xhs=小红书",
     )
     return parser.parse_args()
 
@@ -62,6 +74,94 @@ def read_csv(path: Path) -> pd.DataFrame:
         except Exception:
             continue
     raise RuntimeError(f"无法读取CSV: {path}")
+
+
+def _read_text_with_fallback(path: Path) -> str:
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return path.read_text(encoding=enc)
+        except Exception:
+            continue
+    raise RuntimeError(f"无法读取文本文件: {path}")
+
+
+def _parse_section_csv(path: Path, start_line: int, end_line: int) -> pd.DataFrame:
+    lines = _read_text_with_fallback(path).splitlines()
+    chunk = lines[start_line - 1 : end_line]
+    chunk = [line for line in chunk if line.strip()]
+    if not chunk:
+        return pd.DataFrame()
+
+    reader = csv.reader(chunk)
+    rows = list(reader)
+    if not rows:
+        return pd.DataFrame()
+
+    header = [str(x).strip() for x in rows[0]]
+    data_rows = rows[1:]
+    clean_rows = []
+    for row in data_rows:
+        if len(row) < len(header):
+            row = row + [""] * (len(header) - len(row))
+        clean_rows.append(row[: len(header)])
+
+    df = pd.DataFrame(clean_rows, columns=header)
+    rename_map = {
+        "关键词": "检索词",
+        "词条": "话题",
+        "链接": "话题链接",
+    }
+    df = df.rename(columns=rename_map)
+    return df
+
+
+def read_platform_corpus(path: Path, platform: str) -> pd.DataFrame:
+    if platform in ("dy", "xhs") and path.suffix.lower() == ".csv":
+        start_line, end_line = PLATFORM_LINE_RANGES[platform][0]
+        return _parse_section_csv(path, start_line, end_line)
+    return read_csv(path)
+
+
+def _slice_by_line_ranges(df: pd.DataFrame, ranges: List[tuple[int, int]]) -> pd.DataFrame:
+    idx_parts = []
+    total = len(df)
+    for start_line, end_line in ranges:
+        start_idx = max(0, start_line - 2)
+        end_idx = min(total - 1, end_line - 2)
+        if start_idx <= end_idx:
+            idx_parts.append(df.iloc[start_idx : end_idx + 1])
+    if not idx_parts:
+        return df.iloc[0:0].copy()
+    return pd.concat(idx_parts, ignore_index=True)
+
+
+def filter_df_by_platform(df: pd.DataFrame, platform: str) -> pd.DataFrame:
+    if "平台" in df.columns:
+        val_map = {
+            "wb": ["微博", "weibo", "wb"],
+            "dy": ["抖音", "douyin", "dy"],
+            "xhs": ["小红书", "xiaohongshu", "xhs"],
+        }
+        markers = [m.lower() for m in val_map[platform]]
+        col = df["平台"].astype(str).str.strip().str.lower()
+        return df[col.apply(lambda x: any(m in x for m in markers))].copy()
+
+    if platform in PLATFORM_LINE_RANGES:
+        return _slice_by_line_ranges(df, PLATFORM_LINE_RANGES[platform])
+
+    if platform == "wb":
+        # 没有“平台”列时，按已知区段排除 dy/xhs，剩余视为 wb 区段。
+        mask = pd.Series(True, index=df.index)
+        total = len(df)
+        for ranges in PLATFORM_LINE_RANGES.values():
+            for start_line, end_line in ranges:
+                start_idx = max(0, start_line - 2)
+                end_idx = min(total - 1, end_line - 2)
+                if start_idx <= end_idx:
+                    mask.iloc[start_idx : end_idx + 1] = False
+        return df[mask].copy()
+
+    return df.copy()
 
 
 def normalize_text(v) -> str:
@@ -113,8 +213,6 @@ def build_corpus_rows(df: pd.DataFrame) -> List[Dict]:
     out: List[Dict] = []
     for _, r in df.iterrows():
         day = parse_day(r.get("时间"))
-        if not day:
-            continue
         out.append(
             {
                 "day": day,
@@ -197,12 +295,43 @@ def choose_best(note: Dict, candidates: List[Dict]) -> Optional[Dict]:
     return best if best_score > 0 else None
 
 
-def fetch_weibo_notes(cur, start: str, end: str, only_empty: bool, scan_by: str) -> List[Dict]:
+PLATFORM_CONFIG = {
+    "wb": {
+        "table": "weibo_note",
+        "id_col": "id",
+        "source_keyword_col": "source_keyword",
+        "content_expr": "content",
+        "day_expr": "DATE(FROM_UNIXTIME(create_time + 28800))",
+    },
+    "dy": {
+        "table": "douyin_aweme",
+        "id_col": "id",
+        "source_keyword_col": "source_keyword",
+        "content_expr": "CONCAT(COALESCE(`title`, ''), ' ', COALESCE(`desc`, ''))",
+        "day_expr": "DATE(FROM_UNIXTIME(CASE WHEN `create_time` > 20000000000 THEN `create_time`/1000 ELSE `create_time` END + 28800))",
+    },
+    "xhs": {
+        "table": "xhs_note",
+        "id_col": "id",
+        "source_keyword_col": "source_keyword",
+        "content_expr": "CONCAT(COALESCE(`title`, ''), ' ', COALESCE(`desc`, ''))",
+        "day_expr": "DATE(FROM_UNIXTIME(CASE WHEN `time` > 20000000000 THEN `time`/1000 ELSE `time` END + 28800))",
+    },
+}
+
+
+def fetch_notes(cur, start: str, end: str, only_empty: bool, scan_by: str, platform: str) -> List[Dict]:
+    cfg = PLATFORM_CONFIG[platform]
+    table = cfg["table"]
+    id_col = cfg["id_col"]
+    source_keyword_col = cfg["source_keyword_col"]
+    content_expr = cfg["content_expr"]
+    day_expr = cfg["day_expr"]
     where_empty = "AND (lang_theme IS NULL OR lang_theme = '')" if only_empty else ""
     if scan_by == "topic-date":
         sql = f"""
-            SELECT id, source_keyword, content, topic_id, DATE(FROM_UNIXTIME(create_time + 28800)) AS day
-            FROM weibo_note
+            SELECT {id_col}, {source_keyword_col}, {content_expr} AS content, topic_id, {day_expr} AS day
+            FROM {table}
             WHERE topic_id IN (
                 SELECT topic_id FROM daily_topics
                 WHERE extract_date BETWEEN %s AND %s
@@ -211,9 +340,9 @@ def fetch_weibo_notes(cur, start: str, end: str, only_empty: bool, scan_by: str)
         """
     else:
         sql = f"""
-            SELECT id, source_keyword, content, topic_id, DATE(FROM_UNIXTIME(create_time + 28800)) AS day
-            FROM weibo_note
-            WHERE DATE(FROM_UNIXTIME(create_time + 28800)) BETWEEN %s AND %s
+            SELECT {id_col}, {source_keyword_col}, {content_expr} AS content, topic_id, {day_expr} AS day
+            FROM {table}
+            WHERE {day_expr} BETWEEN %s AND %s
             {where_empty}
         """
     cur.execute(sql, (start, end))
@@ -235,9 +364,10 @@ def build_kw_topic_index(rows: List[Dict]) -> Dict[str, List[Dict]]:
     return idx
 
 
-def update_note(cur, note_id: int, match: Dict) -> int:
+def update_note(cur, note_id: int, match: Dict, platform: str) -> int:
+    table = PLATFORM_CONFIG[platform]["table"]
     sql = """
-        UPDATE weibo_note
+        UPDATE {table_name}
         SET
             lang_theme = %s,
             lang_sub_theme = %s,
@@ -263,7 +393,7 @@ def update_note(cur, note_id: int, match: Dict) -> int:
             topic_mark = %s,
             topic_link = %s
         WHERE id = %s
-    """
+    """.format(table_name=table)
     cur.execute(
         sql,
         (
@@ -302,26 +432,41 @@ def main() -> None:
     if not input_path.is_absolute():
         input_path = PROJECT_ROOT / input_path
 
-    df = read_csv(input_path)
+    raw_df = read_platform_corpus(input_path, args.platform)
+    if args.platform in ("dy", "xhs") and input_path.suffix.lower() == ".csv":
+        df = raw_df
+    else:
+        df = filter_df_by_platform(raw_df, args.platform)
     corpus_rows = build_corpus_rows(df)
     if not corpus_rows:
         raise RuntimeError("语料为空或没有可解析的“时间”字段。")
 
+    dated_days = [r["day"] for r in corpus_rows if r.get("day")]
     if args.start_date:
         start_date = pd.to_datetime(args.start_date).date()
+    elif dated_days:
+        start_date = min(dated_days)
     else:
-        start_date = min(r["day"] for r in corpus_rows)
+        raise RuntimeError("当前平台语料未包含“时间”，请显式传入 --start-date。")
+
     if args.end_date:
         end_date = pd.to_datetime(args.end_date).date()
+    elif dated_days:
+        end_date = max(dated_days)
     else:
-        end_date = max(r["day"] for r in corpus_rows)
+        raise RuntimeError("当前平台语料未包含“时间”，请显式传入 --end-date。")
 
     by_day: Dict[date, List[Dict]] = {}
+    undated_rows: List[Dict] = []
     for row in corpus_rows:
-        if row["day"] < start_date or row["day"] > end_date:
+        row_day = row.get("day")
+        if row_day is None:
+            undated_rows.append(row)
             continue
-        by_day.setdefault(row["day"], []).append(row)
-    kw_topic_idx = build_kw_topic_index([r for rs in by_day.values() for r in rs])
+        if row_day < start_date or row_day > end_date:
+            continue
+        by_day.setdefault(row_day, []).append(row)
+    kw_topic_idx = build_kw_topic_index([r for rs in by_day.values() for r in rs] + undated_rows)
 
     env = parse_env(PROJECT_ROOT / ".env")
     conn = pymysql.connect(
@@ -335,7 +480,7 @@ def main() -> None:
     )
     cur = conn.cursor()
 
-    notes = fetch_weibo_notes(cur, str(start_date), str(end_date), args.only_empty, args.scan_by)
+    notes = fetch_notes(cur, str(start_date), str(end_date), args.only_empty, args.scan_by, args.platform)
     matched = 0
     updated = 0
     for note in notes:
@@ -352,7 +497,7 @@ def main() -> None:
             continue
         matched += 1
         if not args.dry_run:
-            updated += update_note(cur, note["id"], best)
+            updated += update_note(cur, note["id"], best, args.platform)
 
     if args.dry_run:
         conn.rollback()
@@ -362,6 +507,7 @@ def main() -> None:
     conn.close()
 
     print(f"date_range={start_date}~{end_date}")
+    print(f"platform={args.platform}")
     print(f"notes_scanned={len(notes)}")
     print(f"matched={matched}")
     print(f"updated={updated if not args.dry_run else 0}")
