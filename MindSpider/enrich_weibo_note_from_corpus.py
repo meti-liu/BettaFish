@@ -11,9 +11,9 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pandas as pd
 import pymysql
@@ -33,6 +33,13 @@ def parse_args() -> argparse.Namespace:
         "--only-empty",
         action="store_true",
         help="仅回填 lang_theme 为空的记录（推荐）",
+    )
+    parser.add_argument(
+        "--scan-by",
+        type=str,
+        choices=["topic-date", "note-day"],
+        default="topic-date",
+        help="扫描weibo_note方式：topic-date=按topic_id所属daily_topics日期；note-day=按帖子创建日期",
     )
     return parser.parse_args()
 
@@ -71,11 +78,32 @@ def normalize_topic(v: str) -> str:
     return s.replace("#", "").strip()
 
 
+def canonical_text(v: str) -> str:
+    s = normalize_topic(v)
+    return "".join(ch.lower() for ch in s if not ch.isspace())
+
+
 def parse_day(v) -> Optional[date]:
     s = normalize_text(v)
     if not s:
         return None
-    ts = pd.to_datetime(s, errors="coerce")
+    known_formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y",
+    ]
+    for fmt in known_formats:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    ts = pd.to_datetime(s, errors="coerce", dayfirst=False, yearfirst=False)
     if pd.isna(ts):
         return None
     return ts.date()
@@ -128,37 +156,83 @@ def int_or_none(s: str) -> Optional[int]:
         return None
 
 
+def datetime_or_none(s: str) -> Optional[str]:
+    s = normalize_text(s)
+    if not s:
+        return None
+    ts = pd.to_datetime(s, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return ts.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def choose_best(note: Dict, candidates: List[Dict]) -> Optional[Dict]:
     src_kw = normalize_text(note.get("source_keyword"))
     content = normalize_text(note.get("content"))
+    note_day = note.get("day")
+    src_kw_norm = canonical_text(src_kw)
+    content_norm = canonical_text(content)
     best = None
     best_score = -1
     for c in candidates:
         score = 0
-        if src_kw and src_kw in {c["keyword"], c["topic"]}:
+        c_kw = normalize_text(c["keyword"])
+        c_topic = normalize_text(c["topic"])
+        c_kw_norm = canonical_text(c_kw)
+        c_topic_norm = canonical_text(c_topic)
+
+        if src_kw and src_kw in {c_kw, c_topic}:
             score += 3
-        norm_topic = normalize_topic(c["topic"])
-        if norm_topic and norm_topic in content:
+        if src_kw_norm and src_kw_norm in {c_kw_norm, c_topic_norm}:
             score += 2
-        if c["keyword"] and c["keyword"] in content:
+        if c_topic_norm and c_topic_norm in content_norm:
+            score += 2
+        if c_kw_norm and c_kw_norm in content_norm:
             score += 1
+        if note_day and c.get("day") == note_day:
+            score += 2
         if score > best_score:
             best_score = score
             best = c
     return best if best_score > 0 else None
 
 
-def fetch_weibo_notes(cur, start: str, end: str, only_empty: bool) -> List[Dict]:
+def fetch_weibo_notes(cur, start: str, end: str, only_empty: bool, scan_by: str) -> List[Dict]:
     where_empty = "AND (lang_theme IS NULL OR lang_theme = '')" if only_empty else ""
-    sql = f"""
-        SELECT id, source_keyword, content, DATE(FROM_UNIXTIME(create_time + 28800)) AS day
-        FROM weibo_note
-        WHERE DATE(FROM_UNIXTIME(create_time + 28800)) BETWEEN %s AND %s
-        {where_empty}
-    """
+    if scan_by == "topic-date":
+        sql = f"""
+            SELECT id, source_keyword, content, topic_id, DATE(FROM_UNIXTIME(create_time + 28800)) AS day
+            FROM weibo_note
+            WHERE topic_id IN (
+                SELECT topic_id FROM daily_topics
+                WHERE extract_date BETWEEN %s AND %s
+            )
+            {where_empty}
+        """
+    else:
+        sql = f"""
+            SELECT id, source_keyword, content, topic_id, DATE(FROM_UNIXTIME(create_time + 28800)) AS day
+            FROM weibo_note
+            WHERE DATE(FROM_UNIXTIME(create_time + 28800)) BETWEEN %s AND %s
+            {where_empty}
+        """
     cur.execute(sql, (start, end))
     rows = cur.fetchall()
-    return [{"id": r[0], "source_keyword": r[1], "content": r[2], "day": r[3]} for r in rows]
+    return [
+        {"id": r[0], "source_keyword": r[1], "content": r[2], "topic_id": r[3], "day": r[4]}
+        for r in rows
+    ]
+
+
+def build_kw_topic_index(rows: List[Dict]) -> Dict[str, List[Dict]]:
+    idx: Dict[str, List[Dict]] = {}
+    for r in rows:
+        for key in (r["keyword"], r["topic"]):
+            norm = canonical_text(key)
+            if not norm:
+                continue
+            idx.setdefault(norm, []).append(r)
+    return idx
 
 
 def update_note(cur, note_id: int, match: Dict) -> int:
@@ -208,7 +282,7 @@ def update_note(cur, note_id: int, match: Dict) -> int:
             match["keyword"],
             match["topic"],
             int_or_none(match["heat"]),
-            match["corpus_time"],
+            datetime_or_none(match["corpus_time"]),
             int_or_none(match["site_click_count"]),
             int_or_none(match["daily_rank_minutes"]),
             match["host_name"],
@@ -247,6 +321,7 @@ def main() -> None:
         if row["day"] < start_date or row["day"] > end_date:
             continue
         by_day.setdefault(row["day"], []).append(row)
+    kw_topic_idx = build_kw_topic_index([r for rs in by_day.values() for r in rs])
 
     env = parse_env(PROJECT_ROOT / ".env")
     conn = pymysql.connect(
@@ -260,12 +335,16 @@ def main() -> None:
     )
     cur = conn.cursor()
 
-    notes = fetch_weibo_notes(cur, str(start_date), str(end_date), args.only_empty)
+    notes = fetch_weibo_notes(cur, str(start_date), str(end_date), args.only_empty, args.scan_by)
     matched = 0
     updated = 0
     for note in notes:
         day = note["day"]
-        candidates = by_day.get(day, [])
+        candidates = list(by_day.get(day, []))
+        # 回退：如果同日候选少或匹配不到，则按关键词/话题全局候选补充。
+        src_kw_norm = canonical_text(note.get("source_keyword", ""))
+        if src_kw_norm and src_kw_norm in kw_topic_idx:
+            candidates.extend(kw_topic_idx[src_kw_norm])
         if not candidates:
             continue
         best = choose_best(note, candidates)
