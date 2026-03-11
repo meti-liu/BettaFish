@@ -606,14 +606,14 @@ def main():
     col1, col2 = st.columns([3, 2])
     with col1:
         st.subheader("省份热度 Top 10")
-        st.dataframe(map_data[:10], width="stretch", hide_index=True)
+        st.dataframe(map_data[:10], use_container_width=True, hide_index=True)
 
     with col2:
         st.subheader("区域汇总")
         ranked_regions = sorted(region_totals.items(), key=lambda x: x[1], reverse=True)
         st.dataframe(
             [{"区域": name, "热度": score} for name, score in ranked_regions],
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -679,7 +679,7 @@ def main():
             top_words = sorted(freq_map.items(), key=lambda x: x[1], reverse=True)[:20]
             st.dataframe(
                 [{"词": w, "频次": c} for w, c in top_words],
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -721,7 +721,7 @@ def main():
             rank_df[
                 ["排名", "事件标题", "平台", "日期", "最佳榜单排名", "出现次数", "影响力", "链接"]
             ],
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 

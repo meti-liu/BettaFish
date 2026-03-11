@@ -137,6 +137,32 @@ ALTER TABLE `weibo_note`
 ADD COLUMN `topic_id` varchar(64) DEFAULT NULL COMMENT '关联的话题ID',
 ADD COLUMN `crawling_task_id` varchar(64) DEFAULT NULL COMMENT '关联的爬取任务ID';
 
+-- 为微博帖子表添加语料标注字段（对齐 Data/自建语料库 (1).csv）
+ALTER TABLE `weibo_note`
+ADD COLUMN `lang_theme` varchar(128) DEFAULT NULL COMMENT '主题',
+ADD COLUMN `lang_sub_theme` varchar(128) DEFAULT NULL COMMENT '次主题',
+ADD COLUMN `lang_third_theme` varchar(128) DEFAULT NULL COMMENT '次次主题',
+ADD COLUMN `remark1` varchar(255) DEFAULT NULL COMMENT '备注1',
+ADD COLUMN `remark2` varchar(255) DEFAULT NULL COMMENT '备注2',
+ADD COLUMN `remark3` varchar(255) DEFAULT NULL COMMENT '备注3',
+ADD COLUMN `role_media` varchar(64) DEFAULT NULL COMMENT '媒体',
+ADD COLUMN `role_expert` varchar(64) DEFAULT NULL COMMENT '专家',
+ADD COLUMN `role_public` varchar(64) DEFAULT NULL COMMENT '普通人',
+ADD COLUMN `role_government` varchar(64) DEFAULT NULL COMMENT '政府',
+ADD COLUMN `role_enterprise` varchar(64) DEFAULT NULL COMMENT '企业',
+ADD COLUMN `reproduce_flag` varchar(64) DEFAULT NULL COMMENT '复现',
+ADD COLUMN `corpus_keyword` varchar(255) DEFAULT NULL COMMENT '检索词',
+ADD COLUMN `corpus_topic` varchar(500) DEFAULT NULL COMMENT '话题',
+ADD COLUMN `corpus_heat` bigint DEFAULT NULL COMMENT '热度',
+ADD COLUMN `corpus_time` datetime DEFAULT NULL COMMENT '语料时间',
+ADD COLUMN `site_click_count` int DEFAULT NULL COMMENT '本站点击次数',
+ADD COLUMN `daily_rank_minutes` int DEFAULT NULL COMMENT '当日上榜时间（分）',
+ADD COLUMN `host_name` varchar(255) DEFAULT NULL COMMENT '主持人',
+ADD COLUMN `host_homepage` text COMMENT '主持人主页',
+ADD COLUMN `topic_category` varchar(128) DEFAULT NULL COMMENT '分类',
+ADD COLUMN `topic_mark` varchar(64) DEFAULT NULL COMMENT '标识',
+ADD COLUMN `topic_link` text COMMENT '话题链接';
+
 -- 为贴吧帖子表添加话题关联字段
 ALTER TABLE `tieba_note` 
 ADD COLUMN `topic_id` varchar(64) DEFAULT NULL COMMENT '关联的话题ID',

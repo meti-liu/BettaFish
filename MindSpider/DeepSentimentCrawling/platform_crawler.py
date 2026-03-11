@@ -155,8 +155,9 @@ postgres_db_config = {{
             logger.exception(f"配置MediaCrawler数据库失败: {e}")
             return False
     
-    def create_base_config(self, platform: str, keywords: List[str], 
-                          crawler_type: str = "search", max_notes: int = 50) -> bool:
+    def create_base_config(self, platform: str, keywords: List[str],
+                          crawler_type: str = "search", max_notes: int = 50,
+                          max_comments: int = 20) -> bool:
         """
         创建MediaCrawler的基础配置
         
@@ -212,7 +213,7 @@ postgres_db_config = {{
                 elif line.startswith('ENABLE_GET_COMMENTS = '):
                     replaced = 'ENABLE_GET_COMMENTS = True'
                 elif line.startswith('CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = '):
-                    replaced = 'CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = 20'
+                    replaced = f'CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = {max_comments}'
                 elif line.startswith('HEADLESS = '):
                     replaced = 'HEADLESS = True'
 
@@ -228,7 +229,10 @@ postgres_db_config = {{
             with open(base_config_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(new_lines))
             
-            logger.info(f"已配置 {platform} 平台，爬取类型: {crawler_type}，关键词数量: {len(keywords)}，最大爬取数量: {max_notes}，保存数据方式: {save_data_option}")
+            logger.info(
+                f"已配置 {platform} 平台，爬取类型: {crawler_type}，关键词数量: {len(keywords)}，"
+                f"最大爬取数量: {max_notes}，单条最大评论数: {max_comments}，保存数据方式: {save_data_option}"
+            )
             return True
             
         except Exception as e:
@@ -237,6 +241,7 @@ postgres_db_config = {{
     
     def run_crawler(self, platform: str, keywords: List[str],
                    login_type: str = "qrcode", max_notes: int = 50,
+                   max_comments: int = 20,
                    topic_id: Optional[str] = None) -> Dict:
         """
         运行爬虫
@@ -270,7 +275,7 @@ postgres_db_config = {{
                 return {"success": False, "error": "数据库配置失败"}
             
             # 创建基础配置
-            if not self.create_base_config(platform, keywords, "search", max_notes):
+            if not self.create_base_config(platform, keywords, "search", max_notes, max_comments):
                 return {"success": False, "error": "基础配置创建失败"}
             
             # 判断数据库类型，确定 save_data_option
@@ -375,6 +380,7 @@ postgres_db_config = {{
     
     def run_multi_platform_crawl_by_keywords(self, keywords: List[str], platforms: List[str],
                                             login_type: str = "qrcode", max_notes_per_keyword: int = 50,
+                                            max_comments_per_note: int = 20,
                                             topic_id: Optional[str] = None) -> Dict:
         """
         基于关键词的多平台爬取 - 每个关键词在所有平台上都进行爬取
@@ -394,6 +400,7 @@ postgres_db_config = {{
         start_message += f"\n   平台数量: {len(platforms)}"
         start_message += f"\n   登录方式: {login_type}"
         start_message += f"\n   每个关键词在每个平台的最大爬取数量: {max_notes_per_keyword}"
+        start_message += f"\n   每条内容最大评论抓取数量: {max_comments_per_note}"
         start_message += f"\n   总爬取任务: {len(keywords)} × {len(platforms)} = {len(keywords) * len(platforms)}"
         if topic_id:
             start_message += f"\n   关联 topic_id: {topic_id}"
@@ -432,6 +439,7 @@ postgres_db_config = {{
                     keywords,
                     login_type,
                     max_notes_per_keyword,
+                    max_comments=max_comments_per_note,
                     topic_id=topic_id,
                 )
                 

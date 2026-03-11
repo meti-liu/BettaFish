@@ -30,6 +30,7 @@ class DeepSentimentCrawling:
     def run_daily_crawling(self, target_date: date = None, platforms: List[str] = None, 
                           max_keywords_per_platform: int = 50, 
                           max_notes_per_platform: int = 50,
+                          max_comments_per_note: int = 20,
                           login_type: str = "qrcode") -> Dict:
         """
         执行每日爬取任务
@@ -81,7 +82,12 @@ class DeepSentimentCrawling:
         # 3. 执行全平台关键词爬取
         print(f"\n🔄 开始全平台关键词爬取...")
         crawl_results = self.platform_crawler.run_multi_platform_crawl_by_keywords(
-            keywords, platforms, login_type, max_notes_per_platform, topic_id=topic_id
+            keywords,
+            platforms,
+            login_type,
+            max_notes_per_platform,
+            max_comments_per_note=max_comments_per_note,
+            topic_id=topic_id,
         )
         
         # 4. 生成最终报告
@@ -103,7 +109,7 @@ class DeepSentimentCrawling:
         return final_report
     
     def run_platform_crawling(self, platform: str, target_date: date = None,
-                             max_keywords: int = 50, max_notes: int = 50,
+                             max_keywords: int = 50, max_notes: int = 50, max_comments: int = 20,
                              login_type: str = "qrcode") -> Dict:
         """
         执行单个平台的爬取任务
@@ -139,7 +145,7 @@ class DeepSentimentCrawling:
         
         # 执行爬取
         result = self.platform_crawler.run_crawler(
-            platform, keywords, login_type, max_notes
+            platform, keywords, login_type, max_notes, max_comments=max_comments
         )
         
         return result
@@ -210,6 +216,8 @@ def main():
                        help="每个平台最大关键词数量 (默认: 50)")
     parser.add_argument("--max-notes", type=int, default=50,
                        help="每个平台最大爬取内容数量 (默认: 50)")
+    parser.add_argument("--max-comments", type=int, default=20,
+                       help="每条内容最大评论抓取数量 (默认: 20)")
     parser.add_argument("--login-type", type=str, choices=['qrcode', 'phone', 'cookie'], 
                        default='qrcode', help="登录方式 (默认: qrcode)")
     
@@ -248,13 +256,14 @@ def main():
         if args.test:
             args.max_keywords = min(args.max_keywords, 10)
             args.max_notes = min(args.max_notes, 10)
+            args.max_comments = min(args.max_comments, 20)
             print("测试模式：限制关键词和内容数量")
         
         # 单平台爬取
         if args.platform:
             result = crawler.run_platform_crawling(
                 args.platform, target_date, args.max_keywords, 
-                args.max_notes, args.login_type
+                args.max_notes, args.max_comments, args.login_type
             )
             
             if result['success']:
@@ -268,7 +277,7 @@ def main():
         platforms = args.platforms if args.platforms else None
         result = crawler.run_daily_crawling(
             target_date, platforms, args.max_keywords, 
-            args.max_notes, args.login_type
+            args.max_notes, args.max_comments, args.login_type
         )
         
         if result['success']:
