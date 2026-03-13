@@ -6,6 +6,11 @@
 <div class="glass panel fade-up">
   <div class="panel-title">趋势筛选</div>
   <div class="inline-filters">
+    <select id="platformSelect">
+      <option value="weibo">微博</option>
+      <option value="xhs">小红书</option>
+      <option value="dy">抖音</option>
+    </select>
     <input id="topicInput" type="text" placeholder="输入主题关键词（可选）">
     <input id="startDate" type="date">
     <input id="endDate" type="date">
@@ -23,8 +28,24 @@
     <div id="countChart" class="chart"></div>
   </div>
 </div>
+
+<div class="panel-grid trend-grid">
+  <div class="glass panel fade-up">
+    <div class="panel-title">风险矩阵气泡图（速度 × 恶意度）</div>
+    <div id="riskMatrixChart" class="chart"></div>
+  </div>
+  <div class="glass panel fade-up">
+    <div class="panel-title">风险等级分布</div>
+    <div id="riskLevelChart" class="chart"></div>
+  </div>
+</div>
+
+<div class="glass panel fade-up">
+  <div class="panel-title">高风险主题 Top10</div>
+  <div id="topRiskTopicChart" class="chart"></div>
+</div>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='mvp/js/trend.js') }}"></script>
+<script src="{{ url_for('static', filename='mvp/js/trend.js', v='20260313c') }}"></script>
 {% endblock %}

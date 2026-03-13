@@ -7,6 +7,14 @@
   <div class="glass panel fade-up">
     <div class="panel-title">筛选器</div>
     <div class="filter-row">
+      <label>平台</label>
+      <select id="platformSelect">
+        <option value="weibo">微博</option>
+        <option value="xhs">小红书</option>
+        <option value="dy">抖音</option>
+      </select>
+    </div>
+    <div class="filter-row">
       <label>主题关键词</label>
       <input id="topicInput" type="text" placeholder="输入主题关键词，如 语言规范">
     </div>
@@ -24,6 +32,17 @@
   <div class="glass panel fade-up">
     <div class="panel-title">热度 Top10</div>
     <div id="rankingList" class="ranking-list"></div>
+  </div>
+</div>
+
+<div class="panel-grid trend-grid">
+  <div class="glass panel fade-up">
+    <div class="panel-title">词云图</div>
+    <div id="wordcloudChart" class="chart"></div>
+  </div>
+  <div class="glass panel fade-up">
+    <div class="panel-title">平台分布</div>
+    <div id="platformChart" class="chart"></div>
   </div>
 </div>
 
@@ -49,8 +68,29 @@
     <button id="nextPage">下一页</button>
   </div>
 </div>
+
+<div class="glass panel fade-up">
+  <div class="panel-title">话题评论区（点击上方话题加载）</div>
+  <div id="topicCommentsMeta" class="badge" style="display:inline-block;margin-bottom:10px;">未选择话题</div>
+  <div class="table-wrap">
+    <table class="event-table">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>用户</th>
+          <th>评论内容</th>
+          <th>点赞</th>
+        </tr>
+      </thead>
+      <tbody id="commentsBody">
+        <tr><td colspan="4">请先点击上方热点话题</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2/dist/echarts-wordcloud.min.js"></script>
 <script src="{{ url_for('static', filename='mvp/js/hot_ranking.js') }}"></script>
 {% endblock %}

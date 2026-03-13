@@ -675,7 +675,7 @@ def main():
             st.warning("分词后没有足够词条，无法生成词云。")
         else:
             wc_img = build_wordcloud_image(freq_map)
-            st.image(wc_img, use_container_width=True)
+            st.image(wc_img, use_column_width=True)
             top_words = sorted(freq_map.items(), key=lambda x: x[1], reverse=True)[:20]
             st.dataframe(
                 [{"词": w, "频次": c} for w, c in top_words],

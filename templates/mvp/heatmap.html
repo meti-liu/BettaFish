@@ -6,6 +6,11 @@
 <div class="glass panel fade-up">
   <div class="panel-title">热力图筛选</div>
   <div class="inline-filters">
+    <select id="platformSelect">
+      <option value="weibo">微博</option>
+      <option value="xhs">小红书</option>
+      <option value="dy">抖音</option>
+    </select>
     <input id="startDate" type="date">
     <input id="endDate" type="date">
     <button id="loadHeatmapBtn" class="btn-primary">刷新热力图</button>
@@ -25,5 +30,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='mvp/js/heatmap.js') }}"></script>
+<script src="{{ url_for('static', filename='mvp/js/heatmap.js', v='20260313b') }}"></script>
 {% endblock %}

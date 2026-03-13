@@ -19,7 +19,15 @@ function showSkeleton(container, rows = 4) {
 }
 
 async function apiGet(url) {
-  const res = await fetch(url);
+  const sep = url.includes("?") ? "&" : "?";
+  const noCacheUrl = `${url}${sep}_ts=${Date.now()}`;
+  const res = await fetch(noCacheUrl, {
+    cache: "no-store",
+    headers: {
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    },
+  });
   const data = await res.json();
   if (!res.ok || !data.success) {
     throw new Error(data.message || "请求失败");

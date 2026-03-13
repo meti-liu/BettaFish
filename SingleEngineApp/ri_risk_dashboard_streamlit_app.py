@@ -551,7 +551,7 @@ def main():
         top10.insert(0, "排名", range(1, len(top10) + 1))
         st.dataframe(
             top10[["排名", "platform", "topic", "RI", "风险等级", "热度", "评论数"]],
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -604,7 +604,7 @@ def main():
     rank_df.insert(0, "排名", range(1, len(rank_df) + 1))
     st.dataframe(
         rank_df[["排名", "platform", "topic", "RI", "风险等级", "热度", "帖子数", "评论数", "传播速度分", "恶意度分"]],
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -620,7 +620,7 @@ def main():
             },
             inplace=True,
         )
-        st.dataframe(sample[["平台", "话题", "帖子ID", "评论时间", "评论内容"]], width="stretch", hide_index=True)
+        st.dataframe(sample[["平台", "话题", "帖子ID", "评论时间", "评论内容"]], use_container_width=True, hide_index=True)
         st.caption("映射规则：`comment表` 通过 `note_id/aweme_id` 关联 `note表`，再由 `source_keyword/topic_id` 归属到话题。")
 
     st.subheader("地区风险地图（RI 视角）")
@@ -641,7 +641,7 @@ def main():
                     "region_risk_score": "地区风险指数",
                 }
             ),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
 

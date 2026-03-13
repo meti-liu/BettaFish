@@ -233,7 +233,7 @@ def main():
                 pd.DataFrame(
                     [{"角色字段": k, "已标注条数": v, "覆盖率": f"{(v / max(len(corpus_df),1)) * 100:.1f}%"} for k, v in role_stats.items()]
                 ),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
@@ -328,7 +328,7 @@ def main():
             .head(80)
             .copy()
         )
-        st.dataframe(sample_df, width="stretch", hide_index=True)
+        st.dataframe(sample_df, use_container_width=True, hide_index=True)
         st.info("建议：这一页可直接作为“语情语料底座说明页”给组长展示，重点强调主题体系、平台差异、可追溯话题样例。")
 
     with tabs[3]:
@@ -390,7 +390,7 @@ def main():
                 pd.DataFrame(
                     [{"主体类型": k, "条目数": v, "占比": f"{(v / max(len(corpus_df),1))*100:.1f}%"} for k, v in source_stats.items()]
                 ),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
