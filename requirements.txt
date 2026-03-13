@@ -66,6 +66,7 @@ transformers>=4.30.0
 sentence-transformers>=2.2.2
 scikit-learn>=1.3.0
 xgboost>=2.0.0
+sentencepiece>=0.2.1
 # NOTE：如果要安装GPU版本的torch，指令为pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
 # ===== 工具库 =====
@@ -88,3 +89,4 @@ flake8>=6.0.0
 # ===== Web服务器 =====
 fastapi==0.110.2
 uvicorn==0.29.0
+# Test write access
