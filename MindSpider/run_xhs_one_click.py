@@ -110,6 +110,15 @@ def main() -> None:
         run_cmd(
             [
                 py,
+                "enrich_xhs_note_fallback.py",
+                "--only-empty",
+                "--dry-run",
+            ],
+            MINDSPIDER_DIR,
+        )
+        run_cmd(
+            [
+                py,
                 "backfill_platform_create_date_time.py",
                 "--tables",
                 "xhs_note",
@@ -166,6 +175,14 @@ def main() -> None:
             args.date,
             "--scan-by",
             "topic-date",
+            "--only-empty",
+        ],
+        MINDSPIDER_DIR,
+    )
+    run_cmd(
+        [
+            py,
+            "enrich_xhs_note_fallback.py",
             "--only-empty",
         ],
         MINDSPIDER_DIR,
