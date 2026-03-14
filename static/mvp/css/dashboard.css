@@ -163,6 +163,21 @@ body {
   margin: -4px 0 8px 0;
 }
 
+.progress-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #74a6ff, #52d89c);
+  transition: width 500ms ease-out;
+}
+
 .seg-toggle {
   display: inline-flex;
   border: 1px solid rgba(255, 255, 255, 0.18);

@@ -1397,14 +1397,6 @@ def api_response_board():
         )
         for r in reports:
             tri = float(r["topic_ri"])
-            if tri >= 65:
-                status = "待处理"
-            elif tri >= 45:
-                status = "处理中"
-            else:
-                status = "已执行"
-            # 轻量效果估计：风险越低 + 攻击占比越低，视作响应效果越好
-            effect_drop = max(0.0, min(60.0, 45.0 - tri * 0.35 + (1 - float(r["attack_ratio"])) * 10.0))
             rows.append(
                 {
                     "platform": platform_key,
@@ -1414,14 +1406,34 @@ def api_response_board():
                     "attack_ratio": r["attack_ratio"],
                     "danger_ratio": r["danger_ratio"],
                     "comment_count": r["comment_count"],
-                    "status": status,
+                    "status": "待定",
                     "measure": _suggestion_by_topic_risk(tri, float(r["attack_ratio"])),
-                    "effect_drop": round(effect_drop, 1),
+                    "effect_drop": 0.0,
                 }
             )
 
     rows.sort(key=lambda x: (x["topic_ri"], x["danger_ratio"], x["comment_count"]), reverse=True)
     rows = rows[:top_n]
+
+    # 分层状态（演示友好）：避免出现“全部已执行”
+    n = len(rows)
+    pending_cut = max(1, math.ceil(n * 0.25))
+    processing_cut = max(pending_cut + 1, math.ceil(n * 0.60))
+    for idx, r in enumerate(rows):
+        tri = float(r["topic_ri"])
+        attack = float(r["attack_ratio"])
+        if tri >= 65 or idx < pending_cut:
+            status = "待处理"
+            effect_drop = max(0.0, min(8.0, (100.0 - tri) * 0.05))
+        elif tri >= 45 or idx < processing_cut:
+            status = "处理中"
+            effect_drop = max(6.0, min(28.0, 10.0 + (1 - attack) * 8.0 + (55.0 - tri) * 0.12))
+        else:
+            status = "已执行"
+            effect_drop = max(18.0, min(60.0, 30.0 + (1 - attack) * 12.0 + (45.0 - tri) * 0.22))
+        r["status"] = status
+        r["effect_drop"] = round(effect_drop, 1)
+
     status_counter: Dict[str, int] = defaultdict(int)
     for r in rows:
         status_counter[r["status"]] += 1

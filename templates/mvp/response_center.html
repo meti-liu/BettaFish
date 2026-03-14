@@ -51,15 +51,31 @@
           <th>攻击占比</th>
           <th>措施</th>
           <th>效果</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody id="responseBoardBody"></tbody>
     </table>
   </div>
 </div>
+
+<div class="panel-grid trend-grid">
+  <div class="glass panel fade-up">
+    <div class="panel-title">响应执行过程（演示）</div>
+    <div id="responseSimMeta" class="hint-text">点击上方“执行响应”按钮查看动态过程</div>
+    <div class="progress-track">
+      <div id="responseSimProgress" class="progress-fill"></div>
+    </div>
+    <div id="responseSimTimeline" class="ranking-list" style="margin-top: 12px;"></div>
+  </div>
+  <div class="glass panel fade-up">
+    <div class="panel-title">单事件风险变化曲线</div>
+    <div id="responseSimChart" class="chart small-chart"></div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='mvp/js/response_center.js', v='20260314b') }}"></script>
+<script src="{{ url_for('static', filename='mvp/js/response_center.js', v='20260315b') }}"></script>
 {% endblock %}
 
