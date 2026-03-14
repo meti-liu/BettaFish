@@ -115,6 +115,13 @@ class MediaCrawlerDB:
         self._table_columns_cache[table_name] = columns
         return columns
 
+    def _resolve_search_fields(self, table_name: str, candidate_fields: List[str]) -> List[str]:
+        """
+        仅保留表中真实存在的检索字段，避免因不同环境字段不一致导致SQL报错。
+        """
+        cols = set(self._get_table_columns(table_name))
+        return [f for f in candidate_fields if f in cols]
+
     def _extract_engagement(self, row: Dict[str, Any]) -> Dict[str, int]:
         """从数据行中提取并统一互动指标"""
         engagement = {}
@@ -205,12 +212,40 @@ class MediaCrawlerDB:
         logger.info(f"--- TOOL: 全局话题搜索 (params: {params_for_log}) ---")
         
         search_term, all_results = f"%{topic}%", []
-        search_configs = { 'bilibili_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video'}, 'bilibili_video_comment': {'fields': ['content'], 'type': 'comment'}, 'douyin_aweme': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video'}, 'douyin_aweme_comment': {'fields': ['content'], 'type': 'comment'}, 'kuaishou_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video'}, 'kuaishou_video_comment': {'fields': ['content'], 'type': 'comment'}, 'weibo_note': {'fields': ['content', 'source_keyword'], 'type': 'note'}, 'weibo_note_comment': {'fields': ['content'], 'type': 'comment'}, 'xhs_note': {'fields': ['title', 'desc', 'tag_list', 'source_keyword'], 'type': 'note'}, 'xhs_note_comment': {'fields': ['content'], 'type': 'comment'}, 'zhihu_content': {'fields': ['title', 'desc', 'content_text', 'source_keyword'], 'type': 'content'}, 'zhihu_comment': {'fields': ['content'], 'type': 'comment'}, 'tieba_note': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'note'}, 'tieba_comment': {'fields': ['content'], 'type': 'comment'}, 'daily_news': {'fields': ['title'], 'type': 'news'}, }
+        search_configs = {
+            'bilibili_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video'},
+            'bilibili_video_comment': {'fields': ['content'], 'type': 'comment'},
+            'douyin_aweme': {
+                'fields': ['title', 'desc', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'],
+                'type': 'video',
+            },
+            'douyin_aweme_comment': {'fields': ['content'], 'type': 'comment'},
+            'kuaishou_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video'},
+            'kuaishou_video_comment': {'fields': ['content'], 'type': 'comment'},
+            'weibo_note': {
+                'fields': ['content', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'],
+                'type': 'note',
+            },
+            'weibo_note_comment': {'fields': ['content'], 'type': 'comment'},
+            'xhs_note': {
+                'fields': ['title', 'desc', 'tag_list', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'],
+                'type': 'note',
+            },
+            'xhs_note_comment': {'fields': ['content'], 'type': 'comment'},
+            'zhihu_content': {'fields': ['title', 'desc', 'content_text', 'source_keyword'], 'type': 'content'},
+            'zhihu_comment': {'fields': ['content'], 'type': 'comment'},
+            'tieba_note': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'note'},
+            'tieba_comment': {'fields': ['content'], 'type': 'comment'},
+            'daily_news': {'fields': ['title'], 'type': 'news'},
+        }
         
         for table, config in search_configs.items():
+            fields = self._resolve_search_fields(table, config['fields'])
+            if not fields:
+                continue
             param_dict = {}
             where_clauses = []
-            for idx, field in enumerate(config['fields']):
+            for idx, field in enumerate(fields):
                 pname = f"term_{idx}"
                 where_clauses.append(f'{self._wrap_query_field_with_dialect(field)} LIKE :{pname}')
                 param_dict[pname] = search_term
@@ -219,7 +254,15 @@ class MediaCrawlerDB:
             query = f'SELECT * FROM {self._wrap_query_field_with_dialect(table)} WHERE {where_clause} ORDER BY id DESC LIMIT :limit'
             raw_results = self._execute_query(query, param_dict)
             for row in raw_results:
-                content = (row.get('title') or row.get('content') or row.get('desc') or row.get('content_text', ''))
+                content = (
+                    row.get('title')
+                    or row.get('content')
+                    or row.get('desc')
+                    or row.get('content_text')
+                    or row.get('corpus_topic')
+                    or row.get('topic_expr')
+                    or row.get('source_keyword', '')
+                )
                 time_key = row.get('create_time') or row.get('time') or row.get('created_time') or row.get('publish_time') or row.get('crawl_date')
                 all_results.append(QueryResult(
                     platform=table.split('_')[0], content_type=config['type'],
@@ -256,16 +299,38 @@ class MediaCrawlerDB:
         
         search_term, all_results = f"%{topic}%", []
         search_configs = {
-            'bilibili_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'sec'}, 'douyin_aweme': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'},
-            'kuaishou_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'}, 'weibo_note': {'fields': ['content', 'source_keyword'], 'type': 'note', 'time_col': 'create_date_time', 'time_type': 'str'},
-            'xhs_note': {'fields': ['title', 'desc', 'tag_list', 'source_keyword'], 'type': 'note', 'time_col': 'time', 'time_type': 'ms'}, 'zhihu_content': {'fields': ['title', 'desc', 'content_text', 'source_keyword'], 'type': 'content', 'time_col': 'created_time', 'time_type': 'sec_str'},
-            'tieba_note': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'note', 'time_col': 'publish_time', 'time_type': 'str'}, 'daily_news': {'fields': ['title'], 'type': 'news', 'time_col': 'crawl_date', 'time_type': 'date_str'},
+            'bilibili_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'sec'},
+            'douyin_aweme': {
+                'fields': ['title', 'desc', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'],
+                'type': 'video',
+                'time_col': 'create_time',
+                'time_type': 'ms',
+            },
+            'kuaishou_video': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'},
+            'weibo_note': {
+                'fields': ['content', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'],
+                'type': 'note',
+                'time_col': 'create_date_time',
+                'time_type': 'str',
+            },
+            'xhs_note': {
+                'fields': ['title', 'desc', 'tag_list', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'],
+                'type': 'note',
+                'time_col': 'time',
+                'time_type': 'ms',
+            },
+            'zhihu_content': {'fields': ['title', 'desc', 'content_text', 'source_keyword'], 'type': 'content', 'time_col': 'created_time', 'time_type': 'sec_str'},
+            'tieba_note': {'fields': ['title', 'desc', 'source_keyword'], 'type': 'note', 'time_col': 'publish_time', 'time_type': 'str'},
+            'daily_news': {'fields': ['title'], 'type': 'news', 'time_col': 'crawl_date', 'time_type': 'date_str'},
         }
 
         for table, config in search_configs.items():
+            fields = self._resolve_search_fields(table, config['fields'])
+            if not fields:
+                continue
             param_dict = {}
             where_clauses = []
-            for idx, field in enumerate(config['fields']):
+            for idx, field in enumerate(fields):
                 pname = f"term_{idx}"
                 where_clauses.append(f'{self._wrap_query_field_with_dialect(field)} LIKE :{pname}')
                 param_dict[pname] = search_term
@@ -274,7 +339,15 @@ class MediaCrawlerDB:
             query = f'SELECT * FROM {self._wrap_query_field_with_dialect(table)} WHERE {where_clause} ORDER BY id DESC LIMIT :limit'
             raw_results = self._execute_query(query, param_dict)
             for row in raw_results:
-                content = (row.get('title') or row.get('content') or row.get('desc') or row.get('content_text', ''))
+                content = (
+                    row.get('title')
+                    or row.get('content')
+                    or row.get('desc')
+                    or row.get('content_text')
+                    or row.get('corpus_topic')
+                    or row.get('topic_expr')
+                    or row.get('source_keyword', '')
+                )
                 time_key = row.get('create_time') or row.get('time') or row.get('created_time') or row.get('publish_time') or row.get('crawl_date')
                 all_results.append(QueryResult(
                     platform=table.split('_')[0], content_type=config['type'],
@@ -349,7 +422,36 @@ class MediaCrawlerDB:
         params_for_log = {'platform': platform, 'topic': topic, 'start_date': start_date, 'end_date': end_date, 'limit': limit}
         logger.info(f"--- TOOL: 平台定向搜索 (params: {params_for_log}) ---")
 
-        all_configs = { 'bilibili': [{'table': 'bilibili_video', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'sec'}, {'table': 'bilibili_video_comment', 'fields': ['content'], 'type': 'comment'}], 'douyin': [{'table': 'douyin_aweme', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'}, {'table': 'douyin_aweme_comment', 'fields': ['content'], 'type': 'comment'}], 'kuaishou': [{'table': 'kuaishou_video', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'}, {'table': 'kuaishou_video_comment', 'fields': ['content'], 'type': 'comment'}], 'weibo': [{'table': 'weibo_note', 'fields': ['content', 'source_keyword'], 'type': 'note', 'time_col': 'create_date_time', 'time_type': 'str'}, {'table': 'weibo_note_comment', 'fields': ['content'], 'type': 'comment'}], 'xhs': [{'table': 'xhs_note', 'fields': ['title', 'desc', 'tag_list', 'source_keyword'], 'type': 'note', 'time_col': 'time', 'time_type': 'ms'}, {'table': 'xhs_note_comment', 'fields': ['content'], 'type': 'comment'}], 'zhihu': [{'table': 'zhihu_content', 'fields': ['title', 'desc', 'content_text', 'source_keyword'], 'type': 'content', 'time_col': 'created_time', 'time_type': 'sec_str'}, {'table': 'zhihu_comment', 'fields': ['content'], 'type': 'comment'}], 'tieba': [{'table': 'tieba_note', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'note', 'time_col': 'publish_time', 'time_type': 'str'}, {'table': 'tieba_comment', 'fields': ['content'], 'type': 'comment'}] }
+        all_configs = {
+            'bilibili': [
+                {'table': 'bilibili_video', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'sec'},
+                {'table': 'bilibili_video_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+            'douyin': [
+                {'table': 'douyin_aweme', 'fields': ['title', 'desc', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'},
+                {'table': 'douyin_aweme_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+            'kuaishou': [
+                {'table': 'kuaishou_video', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'video', 'time_col': 'create_time', 'time_type': 'ms'},
+                {'table': 'kuaishou_video_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+            'weibo': [
+                {'table': 'weibo_note', 'fields': ['content', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'], 'type': 'note', 'time_col': 'create_date_time', 'time_type': 'str'},
+                {'table': 'weibo_note_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+            'xhs': [
+                {'table': 'xhs_note', 'fields': ['title', 'desc', 'tag_list', 'source_keyword', 'corpus_keyword', 'corpus_topic', 'lang_theme', 'lang_sub_theme', 'lang_third_theme', 'topic_expr'], 'type': 'note', 'time_col': 'time', 'time_type': 'ms'},
+                {'table': 'xhs_note_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+            'zhihu': [
+                {'table': 'zhihu_content', 'fields': ['title', 'desc', 'content_text', 'source_keyword'], 'type': 'content', 'time_col': 'created_time', 'time_type': 'sec_str'},
+                {'table': 'zhihu_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+            'tieba': [
+                {'table': 'tieba_note', 'fields': ['title', 'desc', 'source_keyword'], 'type': 'note', 'time_col': 'publish_time', 'time_type': 'str'},
+                {'table': 'tieba_comment', 'fields': ['content'], 'type': 'comment'},
+            ],
+        }
         
         if platform not in all_configs:
             return DBResponse("search_topic_on_platform", params_for_log, error_message=f"不支持的平台: {platform}")
@@ -368,9 +470,12 @@ class MediaCrawlerDB:
 
         for config in platform_configs:
             table = config['table']
-            topic_clause = " OR ".join([f"`{field}` LIKE %s" for field in config['fields']])
+            fields = self._resolve_search_fields(table, config['fields'])
+            if not fields:
+                continue
+            topic_clause = " OR ".join([f"`{field}` LIKE %s" for field in fields])
             query = f"SELECT * FROM `{table}` WHERE {topic_clause}"
-            params = [search_term] * len(config['fields'])
+            params = [search_term] * len(fields)
 
             if start_dt and end_dt and 'time_col' in config:
                 time_col, time_type = config['time_col'], config['time_type']
@@ -390,7 +495,15 @@ class MediaCrawlerDB:
 
             raw_results = self._execute_query(query, tuple(params))
             for row in raw_results:
-                content = (row.get('title') or row.get('content') or row.get('desc') or row.get('content_text', ''))
+                content = (
+                    row.get('title')
+                    or row.get('content')
+                    or row.get('desc')
+                    or row.get('content_text')
+                    or row.get('corpus_topic')
+                    or row.get('topic_expr')
+                    or row.get('source_keyword', '')
+                )
                 time_key = config.get('time_col') and row.get(config.get('time_col'))
                 all_results.append(QueryResult(platform=platform, content_type=config['type'], title_or_content=content if content else '', author_nickname=row.get('nickname') or row.get('user_nickname'), url=row.get('video_url') or row.get('note_url') or row.get('content_url') or row.get('url') or row.get('aweme_url'), publish_time=self._to_datetime(time_key), engagement=self._extract_engagement(row), source_keyword=row.get('source_keyword'), source_table=table))
         

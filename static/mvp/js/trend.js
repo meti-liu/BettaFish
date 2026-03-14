@@ -1,5 +1,8 @@
 const topicInput = document.getElementById("topicInput");
 const platformSelect = document.getElementById("platformSelect");
+const themeSelect = document.getElementById("themeSelect");
+const subThemeSelect = document.getElementById("subThemeSelect");
+const topicSelect = document.getElementById("topicSelect");
 const startDateInput = document.getElementById("startDate");
 const endDateInput = document.getElementById("endDate");
 const loadTrendBtn = document.getElementById("loadTrendBtn");
@@ -11,8 +14,10 @@ const riskLevelChart = echarts.init(document.getElementById("riskLevelChart"));
 const topRiskTopicChart = echarts.init(document.getElementById("topRiskTopicChart"));
 
 function requestUrl() {
-  const topic = encodeURIComponent(topicInput.value.trim());
-  return `/mvp/api/trend-30d?topic=${topic}&start_date=${startDateInput.value}&end_date=${endDateInput.value}&platform=${platformSelect.value}`;
+  const topic = encodeURIComponent((topicSelect?.value || topicInput.value).trim());
+  const theme = encodeURIComponent((themeSelect?.value || "").trim());
+  const subTheme = encodeURIComponent((subThemeSelect?.value || "").trim());
+  return `/mvp/api/trend-30d?topic=${topic}&start_date=${startDateInput.value}&end_date=${endDateInput.value}&platform=${platformSelect.value}&theme=${theme}&sub_theme=${subTheme}`;
 }
 
 function setChart(chart, title, dates, values, color) {
@@ -56,12 +61,63 @@ async function loadTrend() {
   const baseTitle = { left: "center", textStyle: { color: "#fff" } };
   try {
     const trendUrl = requestUrl();
-    const topic = encodeURIComponent(topicInput.value.trim());
-    const matrixUrl = `/mvp/api/risk-matrix?topic=${topic}&start_date=${startDateInput.value}&end_date=${endDateInput.value}&platform=${platformSelect.value}&max_topics=120`;
+    const topic = encodeURIComponent((topicSelect?.value || topicInput.value).trim());
+    const theme = encodeURIComponent((themeSelect?.value || "").trim());
+    const subTheme = encodeURIComponent((subThemeSelect?.value || "").trim());
+    const matrixUrl = `/mvp/api/risk-matrix?topic=${topic}&start_date=${startDateInput.value}&end_date=${endDateInput.value}&platform=${platformSelect.value}&max_topics=30&max_comments_per_topic=30&max_rows=3000&theme=${theme}&sub_theme=${subTheme}`;
     const [trendData, matrixData] = await Promise.all([apiGet(trendUrl), apiGet(matrixUrl)]);
 
     const dates = trendData.data.dates || [];
-    setChart(riskChart, "RI", dates, trendData.data.risk_index || [], "#74a6ff");
+    const riSeries = trendData.data.risk_index || [];
+    const attackSeries = trendData.data.attack_ratio || [];
+    riskChart.setOption(
+      {
+        animationDuration: 320,
+        tooltip: { trigger: "axis" },
+        legend: {
+          data: ["综合RI", "攻击评论占比(%)"],
+          top: 8,
+          textStyle: { color: "#c3d0f2" },
+        },
+        xAxis: {
+          type: "category",
+          data: dates,
+          axisLabel: { color: "#c3d0f2" },
+        },
+        yAxis: {
+          type: "value",
+          min: 0,
+          max: 100,
+          axisLabel: { color: "#c3d0f2" },
+          splitLine: { lineStyle: { color: "rgba(255,255,255,0.08)" } },
+        },
+        series: [
+          {
+            name: "综合RI",
+            type: "line",
+            smooth: true,
+            showSymbol: false,
+            lineStyle: { width: 3, color: "#74a6ff" },
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: "#74a6ff80" },
+                { offset: 1, color: "#74a6ff10" },
+              ]),
+            },
+            data: riSeries,
+          },
+          {
+            name: "攻击评论占比(%)",
+            type: "line",
+            smooth: true,
+            showSymbol: false,
+            lineStyle: { width: 2, type: "dashed", color: "#ff6b8a" },
+            data: attackSeries,
+          },
+        ],
+      },
+      true
+    );
     setChart(countChart, "话题数", dates, trendData.data.topic_counts || [], "#67e8f9");
 
     const bubbles = matrixData.data?.bubbles || [];
@@ -105,7 +161,8 @@ async function loadTrend() {
         series: [
           {
             type: "scatter",
-            symbolSize: (v) => Math.max(8, Math.min(45, Math.sqrt(v[2]) * 2.5)),
+            // v[3] = ri_score, high risk -> larger bubble
+            symbolSize: (v) => Math.max(10, Math.min(54, 8 + Number(v[3] || 0) * 0.46)),
             data: bubbles.map((b) => ({
               value: [b.velocity_score, b.malicious_score, b.note_count, b.ri_score],
               raw: b,
@@ -180,5 +237,37 @@ window.addEventListener("resize", () => {
 
 loadTrendBtn.addEventListener("click", loadTrend);
 platformSelect.addEventListener("change", loadTrend);
+topicSelect?.addEventListener("change", () => {
+  if (topicSelect.value) topicInput.value = topicSelect.value;
+});
+
+async function refreshTopicSelectors(resetDependent = true) {
+  const opts = await loadTopicOptions({
+    platform: platformSelect.value,
+    startDate: startDateInput.value,
+    endDate: endDateInput.value,
+    theme: (themeSelect?.value || "").trim(),
+    subTheme: (subThemeSelect?.value || "").trim(),
+  });
+  fillSelectOptions(themeSelect, opts.themes || [], "全部一级主题");
+  fillSelectOptions(subThemeSelect, opts.sub_themes || [], "全部次主题");
+  fillSelectOptions(topicSelect, opts.topics || [], "可选话题（不选则手输）");
+  if (resetDependent) topicInput.value = "";
+}
+
+themeSelect?.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+  loadTrend();
+});
+subThemeSelect?.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+  loadTrend();
+});
+startDateInput.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+});
+endDateInput.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+});
 formatDateInputDefaults(startDateInput, endDateInput, 30);
-loadTrend();
+refreshTopicSelectors(true).then(loadTrend);

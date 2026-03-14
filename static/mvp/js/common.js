@@ -34,3 +34,22 @@ async function apiGet(url) {
   }
   return data;
 }
+
+function fillSelectOptions(selectEl, items, placeholder) {
+  if (!selectEl) return;
+  const prev = selectEl.value || "";
+  const opts = [`<option value="">${placeholder}</option>`]
+    .concat((items || []).map((x) => `<option value="${String(x).replace(/"/g, "&quot;")}">${x}</option>`))
+    .join("");
+  selectEl.innerHTML = opts;
+  const hasPrev = (items || []).includes(prev);
+  selectEl.value = hasPrev ? prev : "";
+}
+
+async function loadTopicOptions({ platform, startDate, endDate, theme = "", subTheme = "" }) {
+  const url = `/mvp/api/topic-options?platform=${encodeURIComponent(platform)}&start_date=${encodeURIComponent(
+    startDate || ""
+  )}&end_date=${encodeURIComponent(endDate || "")}&theme=${encodeURIComponent(theme)}&sub_theme=${encodeURIComponent(subTheme)}`;
+  const res = await apiGet(url);
+  return res.data || { themes: [], sub_themes: [], topics: [] };
+}

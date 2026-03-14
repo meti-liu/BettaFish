@@ -15,6 +15,24 @@
       </select>
     </div>
     <div class="filter-row">
+      <label>一级主题</label>
+      <select id="themeSelect">
+        <option value="">全部一级主题</option>
+      </select>
+    </div>
+    <div class="filter-row">
+      <label>次主题</label>
+      <select id="subThemeSelect">
+        <option value="">全部次主题</option>
+      </select>
+    </div>
+    <div class="filter-row">
+      <label>话题选项</label>
+      <select id="topicSelect">
+        <option value="">可选话题（不选则手输）</option>
+      </select>
+    </div>
+    <div class="filter-row">
       <label>主题关键词</label>
       <input id="topicInput" type="text" placeholder="输入主题关键词，如 语言规范">
     </div>
@@ -92,5 +110,5 @@
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2/dist/echarts-wordcloud.min.js"></script>
-<script src="{{ url_for('static', filename='mvp/js/hot_ranking.js') }}"></script>
+<script src="{{ url_for('static', filename='mvp/js/hot_ranking.js', v='20260314b') }}"></script>
 {% endblock %}

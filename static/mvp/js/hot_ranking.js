@@ -1,5 +1,8 @@
 const topicInput = document.getElementById("topicInput");
 const platformSelect = document.getElementById("platformSelect");
+const themeSelect = document.getElementById("themeSelect");
+const subThemeSelect = document.getElementById("subThemeSelect");
+const topicSelect = document.getElementById("topicSelect");
 const startDateInput = document.getElementById("startDate");
 const endDateInput = document.getElementById("endDate");
 const searchBtn = document.getElementById("searchBtn");
@@ -24,9 +27,13 @@ function riskClass(ri) {
 }
 
 function currentFilters() {
+  const pickedTopic = (topicSelect?.value || "").trim();
+  const typedTopic = topicInput.value.trim();
   return {
     platform: platformSelect.value,
-    topic: encodeURIComponent(topicInput.value.trim()),
+    theme: encodeURIComponent((themeSelect?.value || "").trim()),
+    subTheme: encodeURIComponent((subThemeSelect?.value || "").trim()),
+    topic: encodeURIComponent(pickedTopic || typedTopic),
     startDate: startDateInput.value,
     endDate: endDateInput.value,
   };
@@ -75,6 +82,7 @@ async function loadEvents() {
     eventsBody.innerHTML = '<tr><td colspan="5"><div class="skeleton"></div></td></tr>';
     const data = await apiGet(
       `/mvp/api/hot-events?page=${currentPage}&page_size=10&topic=${f.topic}&start_date=${f.startDate}&end_date=${f.endDate}&platform=${f.platform}`
+      + `&theme=${f.theme}&sub_theme=${f.subTheme}`
     );
     renderEvents(data.data || []);
     totalPages = data.pagination.total_pages || 1;
@@ -90,6 +98,7 @@ async function loadRanking() {
   try {
     const data = await apiGet(
       `/mvp/api/ranking?top_n=10&topic=${f.topic}&start_date=${f.startDate}&end_date=${f.endDate}&platform=${f.platform}`
+      + `&theme=${f.theme}&sub_theme=${f.subTheme}`
     );
     renderRanking(data.data || []);
   } catch (err) {
@@ -100,7 +109,7 @@ async function loadRanking() {
 async function loadWordcloud() {
   const f = currentFilters();
   const data = await apiGet(
-    `/mvp/api/wordcloud?topic=${f.topic}&start_date=${f.startDate}&end_date=${f.endDate}&platform=${f.platform}&top_n=80`
+    `/mvp/api/wordcloud?topic=${f.topic}&start_date=${f.startDate}&end_date=${f.endDate}&platform=${f.platform}&top_n=80&theme=${f.theme}&sub_theme=${f.subTheme}`
   );
   wordcloudChart.setOption(
     {
@@ -136,7 +145,7 @@ async function loadWordcloud() {
 async function loadPlatformDistribution() {
   const f = currentFilters();
   const data = await apiGet(
-    `/mvp/api/platform-distribution?topic=${f.topic}&start_date=${f.startDate}&end_date=${f.endDate}`
+    `/mvp/api/platform-distribution?topic=${f.topic}&start_date=${f.startDate}&end_date=${f.endDate}&theme=${f.theme}&sub_theme=${f.subTheme}`
   );
   const pieData = data.data || [];
   platformChart.setOption(
@@ -192,7 +201,7 @@ async function loadTopicComments(topicName) {
     const data = await apiGet(
       `/mvp/api/topic-comments?platform=${f.platform}&topic_name=${encodeURIComponent(
         selectedTopic
-      )}&start_date=${f.startDate}&end_date=${f.endDate}&page=1&page_size=20`
+      )}&start_date=${f.startDate}&end_date=${f.endDate}&page=1&page_size=20&theme=${f.theme}&sub_theme=${f.subTheme}`
     );
     renderComments(data.data || []);
   } catch (err) {
@@ -242,10 +251,49 @@ platformSelect.addEventListener("change", () => {
   loadAll();
 });
 
+async function refreshTopicSelectors(resetDependent = true) {
+  const opts = await loadTopicOptions({
+    platform: platformSelect.value,
+    startDate: startDateInput.value,
+    endDate: endDateInput.value,
+    theme: (themeSelect?.value || "").trim(),
+    subTheme: (subThemeSelect?.value || "").trim(),
+  });
+  fillSelectOptions(themeSelect, opts.themes || [], "全部一级主题");
+  fillSelectOptions(subThemeSelect, opts.sub_themes || [], "全部次主题");
+  fillSelectOptions(topicSelect, opts.topics || [], "可选话题（不选则手输）");
+  if (resetDependent) {
+    topicInput.value = "";
+  }
+}
+
+themeSelect?.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+  currentPage = 1;
+  loadAll();
+});
+
+subThemeSelect?.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+  currentPage = 1;
+  loadAll();
+});
+
+topicSelect?.addEventListener("change", () => {
+  if (topicSelect.value) topicInput.value = topicSelect.value;
+});
+
+startDateInput.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+});
+endDateInput.addEventListener("change", async () => {
+  await refreshTopicSelectors(false);
+});
+
 window.addEventListener("resize", () => {
   wordcloudChart.resize();
   platformChart.resize();
 });
 
 formatDateInputDefaults(startDateInput, endDateInput, 30);
-loadAll();
+refreshTopicSelectors(true).then(loadAll);

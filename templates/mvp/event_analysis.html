@@ -1,0 +1,65 @@
+{% extends "mvp/base.html" %}
+
+{% block title %}事件深度解析 - BettaFish{% endblock %}
+
+{% block content %}
+<div class="glass panel fade-up">
+  <div class="panel-title">事件筛选</div>
+  <div class="inline-filters">
+    <select id="platformSelect">
+      <option value="weibo">微博</option>
+      <option value="xhs">小红书</option>
+      <option value="dy">抖音</option>
+    </select>
+    <select id="themeSelect">
+      <option value="">全部一级主题</option>
+    </select>
+    <select id="subThemeSelect">
+      <option value="">全部次主题</option>
+    </select>
+    <select id="topicSelect">
+      <option value="">可选话题（不选则手输）</option>
+    </select>
+    <input id="topicInput" type="text" placeholder="输入话题关键词，如 语言规范/毒品贩运">
+    <input id="startDate" type="date">
+    <input id="endDate" type="date">
+    <button id="loadEventChainBtn" class="btn-primary">生成分析链</button>
+  </div>
+</div>
+
+<div class="panel-grid trend-grid">
+  <div class="glass panel fade-up">
+    <div class="panel-title">事件分析链路</div>
+    <div id="chainChart" class="chart"></div>
+  </div>
+  <div class="glass panel fade-up">
+    <div class="panel-title">风险指标快照</div>
+    <div id="eventMetricCards" class="ranking-list"></div>
+  </div>
+</div>
+
+<div class="glass panel fade-up">
+  <div class="panel-title">高风险原始评论样本（Top20）</div>
+  <div class="table-wrap">
+    <table class="event-table">
+      <thead>
+        <tr>
+          <th>评论ID</th>
+          <th>点赞</th>
+          <th>RI</th>
+          <th>情感分</th>
+          <th>攻击系数</th>
+          <th>原因</th>
+          <th>文本</th>
+        </tr>
+      </thead>
+      <tbody id="eventCommentsBody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='mvp/js/event_analysis.js', v='20260315a') }}"></script>
+{% endblock %}
+

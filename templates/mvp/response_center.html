@@ -1,0 +1,65 @@
+{% extends "mvp/base.html" %}
+
+{% block title %}响应闭环中心 - BettaFish{% endblock %}
+
+{% block content %}
+<div class="glass panel fade-up">
+  <div class="panel-title">预警台账筛选</div>
+  <div class="inline-filters">
+    <select id="platformSelect">
+      <option value="weibo">微博</option>
+      <option value="xhs">小红书</option>
+      <option value="dy">抖音</option>
+    </select>
+    <select id="themeSelect">
+      <option value="">全部一级主题</option>
+    </select>
+    <select id="subThemeSelect">
+      <option value="">全部次主题</option>
+    </select>
+    <select id="topicSelect">
+      <option value="">可选话题（不选则手输）</option>
+    </select>
+    <input id="topicInput" type="text" placeholder="可选：按话题关键词过滤">
+    <input id="startDate" type="date">
+    <input id="endDate" type="date">
+    <button id="loadResponseBoardBtn" class="btn-primary">刷新闭环看板</button>
+  </div>
+</div>
+
+<div class="panel-grid trend-grid">
+  <div class="glass panel fade-up">
+    <div class="panel-title">响应状态分布</div>
+    <div id="statusChart" class="chart"></div>
+  </div>
+  <div class="glass panel fade-up">
+    <div class="panel-title">响应效果评估（风险下降%）</div>
+    <div id="effectChart" class="chart"></div>
+  </div>
+</div>
+
+<div class="glass panel fade-up">
+  <div class="panel-title">预警事件响应台账</div>
+  <div class="table-wrap">
+    <table class="event-table">
+      <thead>
+        <tr>
+          <th>平台</th>
+          <th>话题</th>
+          <th>Topic RI</th>
+          <th>响应状态</th>
+          <th>攻击占比</th>
+          <th>措施</th>
+          <th>效果</th>
+        </tr>
+      </thead>
+      <tbody id="responseBoardBody"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='mvp/js/response_center.js', v='20260314b') }}"></script>
+{% endblock %}
+

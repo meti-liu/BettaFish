@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}BettaFish 可视化看板{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='mvp/css/dashboard.css', v='20260313b') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='mvp/css/dashboard.css', v='20260315c') }}">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
 </head>
 <body>
@@ -22,6 +22,8 @@
       <a class="nav-item {% if page_key == 'hot' %}active{% endif %}" href="/mvp/">热点与排行</a>
       <a class="nav-item {% if page_key == 'trend' %}active{% endif %}" href="/mvp/trend">30天趋势</a>
       <a class="nav-item {% if page_key == 'heatmap' %}active{% endif %}" href="/mvp/heatmap">全国热力图</a>
+      <a class="nav-item {% if page_key == 'event_analysis' %}active{% endif %}" href="/mvp/event-analysis">事件深度解析</a>
+      <a class="nav-item {% if page_key == 'response_center' %}active{% endif %}" href="/mvp/response-center">响应闭环中心</a>
     </aside>
 
     <section class="content">
@@ -29,7 +31,7 @@
     </section>
   </main>
 
-  <script src="{{ url_for('static', filename='mvp/js/common.js', v='20260313b') }}"></script>
+  <script src="{{ url_for('static', filename='mvp/js/common.js', v='20260314b') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

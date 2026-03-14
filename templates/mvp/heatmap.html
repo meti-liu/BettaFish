@@ -11,24 +11,83 @@
       <option value="xhs">小红书</option>
       <option value="dy">抖音</option>
     </select>
+    <select id="themeSelect"></select>
+    <select id="subThemeSelect"></select>
+    <select id="topicSelect"></select>
+    <input id="topicInput" type="text" placeholder="或手动输入主题词">
+    <select id="mapModeSelect">
+      <option value="risk">风险分布</option>
+      <option value="heat">热度分布</option>
+    </select>
     <input id="startDate" type="date">
     <input id="endDate" type="date">
     <button id="loadHeatmapBtn" class="btn-primary">刷新热力图</button>
   </div>
 </div>
 
+<div class="panel-grid stats-grid">
+  <div class="glass panel stat-card fade-up">
+    <div class="stat-label">事件总量</div>
+    <div class="stat-value" id="totalEvents">-</div>
+  </div>
+  <div class="glass panel stat-card fade-up">
+    <div class="stat-label">覆盖省份</div>
+    <div class="stat-value" id="provinceCount">-</div>
+  </div>
+  <div class="glass panel stat-card fade-up">
+    <div class="stat-label">高风险省份</div>
+    <div class="stat-value" id="highRiskProvinces">-</div>
+  </div>
+  <div class="glass panel stat-card fade-up">
+    <div class="stat-label">热度峰值省份</div>
+    <div class="stat-value stat-small" id="peakHeatProvince">-</div>
+  </div>
+  <div class="glass panel stat-card fade-up">
+    <div class="stat-label">风险峰值省份</div>
+    <div class="stat-value stat-small" id="peakRiskProvince">-</div>
+  </div>
+</div>
+
 <div class="panel-grid heat-grid">
   <div class="glass panel fade-up">
-    <div class="panel-title">全国舆情风险分布</div>
+    <div class="title-row">
+      <div class="panel-title">全国舆情分布地图</div>
+      <div class="seg-toggle">
+        <button id="mapModeRiskBtn" class="seg-btn active" type="button">风险地图</button>
+        <button id="mapModeHeatBtn" class="seg-btn" type="button">热度地图</button>
+      </div>
+    </div>
+    <div id="mapModeHint" class="hint-text">当前显示：风险地图（红色区域风险更高）</div>
     <div id="chinaMap" class="chart map-chart"></div>
   </div>
   <div class="glass panel fade-up">
-    <div class="panel-title">省份风险排行榜</div>
+    <div class="panel-title">省份排行</div>
     <div id="regionList" class="ranking-list"></div>
+    <div class="pager">
+      <button id="regionPrevPage" class="btn-primary" type="button">上一页</button>
+      <span id="regionPageInfo">第 1 / 1 页</span>
+      <button id="regionNextPage" class="btn-primary" type="button">下一页</button>
+    </div>
+  </div>
+</div>
+
+<div class="glass panel fade-up">
+  <div class="panel-title">全网热度话题 Top10</div>
+  <div id="hotTopicList" class="ranking-list"></div>
+</div>
+
+<div class="panel-grid heat-detail-grid">
+  <div class="glass panel fade-up">
+    <div class="panel-title">近7天全国综合RI趋势</div>
+    <div id="heatTrendChart" class="chart small-chart"></div>
+  </div>
+  <div class="glass panel fade-up">
+    <div class="panel-title" id="provinceDetailTitle">省份详情（点击地图省份）</div>
+    <div id="provinceDetailList" class="ranking-list"></div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='mvp/js/heatmap.js', v='20260313b') }}"></script>
+<script src="{{ url_for('static', filename='mvp/js/heatmap.js', v='20260315d') }}"></script>
 {% endblock %}
